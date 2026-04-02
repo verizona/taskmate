@@ -26,6 +26,11 @@ type Membership = {
   role: "owner" | "editor" | "viewer";
 };
 
+type MemberProfile = {
+  id: string;
+  email: string | null;
+};
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
@@ -42,6 +47,11 @@ export default function DashboardPage() {
   const [savingList, setSavingList] = useState(false);
 
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [members, setMembers] = useState<MemberProfile[]>([]);
+
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"editor" | "viewer">("editor");
+  const [inviting, setInviting] = useState(false);
 
   useEffect(() => {
     loadDashboard();
@@ -50,8 +60,10 @@ export default function DashboardPage() {
   useEffect(() => {
     if (selectedListId) {
       loadTasksForList(selectedListId);
+      loadMembersForList(selectedListId);
     } else {
       setTasks([]);
+      setMembers([]);
     }
   }, [selectedListId]);
 
@@ -92,6 +104,7 @@ export default function DashboardPage() {
       setLists([]);
       setSelectedListId("");
       setTasks([]);
+      setMembers([]);
       setLoading(false);
       return;
     }
@@ -112,7 +125,6 @@ export default function DashboardPage() {
     setLists(loadedLists);
 
     const stillValidSelected = loadedLists.some((l) => l.id === selectedListId);
-
     const nextSelectedListId = stillValidSelected
       ? selectedListId
       : loadedLists[0]?.id ?? "";
@@ -121,8 +133,10 @@ export default function DashboardPage() {
 
     if (nextSelectedListId) {
       await loadTasksForList(nextSelectedListId);
+      await loadMembersForList(nextSelectedListId);
     } else {
       setTasks([]);
+      setMembers([]);
     }
 
     setLoading(false);
@@ -145,6 +159,37 @@ export default function DashboardPage() {
     setTasks((data ?? []) as Task[]);
   }
 
+  async function loadMembersForList(listId: string) {
+    const { data: memberRows, error: memberError } = await supabase
+      .from("list_members")
+      .select("user_id")
+      .eq("list_id", listId);
+
+    if (memberError) {
+      alert(memberError.message);
+      return;
+    }
+
+    const userIds = (memberRows ?? []).map((m: any) => m.user_id);
+
+    if (userIds.length === 0) {
+      setMembers([]);
+      return;
+    }
+
+    const { data: profileRows, error: profileError } = await supabase
+      .from("profiles")
+      .select("id, email")
+      .in("id", userIds);
+
+    if (profileError) {
+      alert(profileError.message);
+      return;
+    }
+
+    setMembers((profileRows ?? []) as MemberProfile[]);
+  }
+
   function currentRole(): "owner" | "editor" | "viewer" | null {
     const membership = memberships.find((m) => m.list_id === selectedListId);
     return membership?.role ?? null;
@@ -153,6 +198,10 @@ export default function DashboardPage() {
   function canEditCurrentList() {
     const role = currentRole();
     return role === "owner" || role === "editor";
+  }
+
+  function isOwner() {
+    return currentRole() === "owner";
   }
 
   async function createList() {
@@ -269,6 +318,61 @@ export default function DashboardPage() {
     setTasks((prev) => prev.filter((task) => task.id !== taskId));
   }
 
+  async function inviteMember() {
+    const normalizedEmail = inviteEmail.trim().toLowerCase();
+
+    if (!normalizedEmail || !selectedListId) return;
+
+    if (!isOwner()) {
+      alert("Only the list owner can invite members.");
+      return;
+    }
+
+    setInviting(true);
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("id, email")
+      .eq("email", normalizedEmail)
+      .maybeSingle();
+
+    if (profileError) {
+      alert(profileError.message);
+      setInviting(false);
+      return;
+    }
+
+    if (!profile) {
+      alert("No user found with that email.");
+      setInviting(false);
+      return;
+    }
+
+    const { error: insertError } = await supabase.from("list_members").insert([
+      {
+        list_id: selectedListId,
+        user_id: profile.id,
+        role: inviteRole,
+      },
+    ]);
+
+    if (insertError) {
+      if (insertError.message.toLowerCase().includes("duplicate")) {
+        alert("That user is already in this list.");
+      } else {
+        alert(insertError.message);
+      }
+      setInviting(false);
+      return;
+    }
+
+    setInviteEmail("");
+    setInviteRole("editor");
+    await loadMembersForList(selectedListId);
+    alert("User invited successfully.");
+    setInviting(false);
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
     window.location.href = "/";
@@ -375,6 +479,56 @@ export default function DashboardPage() {
                 )}
               </div>
             </div>
+
+            {isOwner() && selectedListId && (
+              <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-4">
+                <div className="text-sm font-medium text-zinc-300">
+                  Invite by email
+                </div>
+
+                <div className="mt-3 flex flex-col gap-3 md:flex-row">
+                  <input
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    placeholder="user@example.com"
+                    className="flex-1 rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none placeholder:text-zinc-500"
+                  />
+
+                  <select
+                    value={inviteRole}
+                    onChange={(e) =>
+                      setInviteRole(e.target.value as "editor" | "viewer")
+                    }
+                    className="rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none"
+                  >
+                    <option value="editor">Editor</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+
+                  <button
+                    onClick={inviteMember}
+                    disabled={inviting}
+                    className="rounded-2xl bg-white px-5 py-3 font-medium text-black hover:bg-zinc-200 disabled:opacity-60"
+                  >
+                    {inviting ? "Inviting..." : "Invite"}
+                  </button>
+                </div>
+
+                <div className="mt-4 text-sm text-zinc-500">
+                  Members:
+                  {members.length > 0 ? (
+                    <span className="ml-2">
+                      {members
+                        .map((m) => m.email || m.id)
+                        .sort()
+                        .join(", ")}
+                    </span>
+                  ) : (
+                    <span className="ml-2">No members yet.</span>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="mt-6 flex gap-3">
               <input
