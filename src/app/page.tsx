@@ -30,13 +30,12 @@ export default function Home() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/dashboard`,
+        redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
 
-    setLoading(false);
-
     if (error) {
+      setLoading(false);
       alert(error.message);
     }
   }
