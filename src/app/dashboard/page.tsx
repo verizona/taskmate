@@ -661,7 +661,7 @@ export default function DashboardPage() {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
-    background: '#f4f7fb',
+    background: '#eef2f7',
     padding: '24px',
     fontFamily: 'Arial, sans-serif',
   },
@@ -671,180 +671,213 @@ const styles: Record<string, React.CSSProperties> = {
   },
   header: {
     display: 'flex',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 16,
-    marginBottom: 20,
+    alignItems: 'center',
+    marginBottom: 24,
   },
   title: {
     margin: 0,
     fontSize: 32,
+    fontWeight: 700,
+    color: '#111827',
   },
   subtle: {
-    color: '#666',
+    color: '#4b5563',
     fontSize: 14,
     marginTop: 4,
   },
+
   grid: {
     display: 'grid',
     gridTemplateColumns: '280px 1fr',
     gap: 20,
   },
+
   sidebar: {
-    background: '#fff',
+    background: '#ffffff',
     borderRadius: 14,
     padding: 16,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
-    height: 'fit-content',
+    border: '1px solid #e5e7eb',
   },
+
   main: {
     display: 'grid',
     gap: 20,
   },
+
   panel: {
-    background: '#fff',
+    background: '#ffffff',
     borderRadius: 14,
-    padding: 16,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
+    padding: 18,
+    border: '1px solid #e5e7eb',
   },
+
   sectionTitle: {
-    marginTop: 0,
     marginBottom: 12,
-    fontSize: 20,
+    fontSize: 18,
+    fontWeight: 600,
+    color: '#111827',
   },
+
   row: {
     display: 'flex',
     gap: 8,
     alignItems: 'center',
     flexWrap: 'wrap',
   },
+
   input: {
     padding: '10px 12px',
-    border: '1px solid #d0d7e2',
-    borderRadius: 10,
+    border: '1px solid #d1d5db',
+    borderRadius: 8,
     fontSize: 14,
     background: '#fff',
+    color: '#111827',
   },
+
   button: {
     padding: '10px 14px',
-    border: 'none',
-    borderRadius: 10,
-    background: '#111827',
+    borderRadius: 8,
+    background: '#2563eb',
     color: '#fff',
+    border: 'none',
     cursor: 'pointer',
+    fontWeight: 600,
   },
+
   secondaryButton: {
     padding: '10px 14px',
-    border: '1px solid #d0d7e2',
-    borderRadius: 10,
+    borderRadius: 8,
     background: '#fff',
-    color: '#111827',
+    border: '1px solid #d1d5db',
     cursor: 'pointer',
+    fontWeight: 500,
   },
+
   dangerButton: {
     padding: '10px 14px',
-    border: 'none',
-    borderRadius: 10,
+    borderRadius: 8,
     background: '#dc2626',
     color: '#fff',
+    border: 'none',
     cursor: 'pointer',
+    fontWeight: 600,
   },
+
   listButton: {
     width: '100%',
     textAlign: 'left',
     border: '1px solid #e5e7eb',
-    borderRadius: 12,
+    borderRadius: 10,
     padding: 12,
     background: '#fff',
     cursor: 'pointer',
     marginBottom: 8,
   },
+
   listButtonActive: {
-    border: '1px solid #111827',
-    background: '#f9fafb',
+    border: '2px solid #2563eb',
+    background: '#eff6ff',
   },
+
   taskComposer: {
     display: 'flex',
     gap: 8,
     flexWrap: 'wrap',
   },
+
   taskCard: {
     border: '1px solid #e5e7eb',
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 10,
+    padding: 14,
     marginBottom: 10,
-    background: '#fff',
+    background: '#ffffff',
   },
+
   taskTop: {
     display: 'flex',
     justifyContent: 'space-between',
-    gap: 12,
     alignItems: 'center',
-    flexWrap: 'wrap',
+    gap: 12,
   },
+
   checkboxRow: {
     display: 'flex',
     alignItems: 'center',
     gap: 10,
     flex: 1,
   },
+
   taskTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 600,
+    color: '#111827',
   },
+
   metaRow: {
+    marginTop: 10,
     display: 'flex',
     gap: 8,
-    marginTop: 10,
-    flexWrap: 'wrap',
   },
+
   metaPill: {
     fontSize: 12,
     background: '#f3f4f6',
     borderRadius: 999,
     padding: '6px 10px',
+    color: '#374151',
   },
+
   memberRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     border: '1px solid #e5e7eb',
-    borderRadius: 12,
+    borderRadius: 10,
     padding: 12,
     marginBottom: 8,
+    background: '#fff',
   },
+
   smallText: {
     fontSize: 12,
-    color: '#666',
+    color: '#6b7280',
   },
+
   success: {
     marginBottom: 12,
     padding: 12,
-    borderRadius: 10,
-    background: '#ecfdf5',
+    borderRadius: 8,
+    background: '#d1fae5',
     color: '#065f46',
+    fontWeight: 500,
   },
+
   error: {
     marginBottom: 12,
     padding: 12,
-    borderRadius: 10,
-    background: '#fef2f2',
+    borderRadius: 8,
+    background: '#fee2e2',
     color: '#991b1b',
+    fontWeight: 500,
   },
+
   empty: {
-    color: '#666',
+    color: '#6b7280',
     padding: '12px 0',
   },
+
   editBlock: {
     display: 'grid',
     gap: 8,
   },
+
   card: {
     maxWidth: 500,
     margin: '80px auto',
     background: '#fff',
     padding: 20,
     borderRadius: 14,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
+    border: '1px solid #e5e7eb',
   },
 }
