@@ -25,7 +25,7 @@ type MemberRow = {
   id: string
   list_id: string
   user_id: string
-  role: 'owner' | 'member'
+  role: 'owner' | 'editor' | 'member'
   created_at: string
   profiles?: {
     email: string | null
@@ -83,6 +83,7 @@ export default function DashboardPage() {
       } = await supabase.auth.getSession()
 
       if (sessionError) throw sessionError
+
       if (!session?.user) {
         window.location.href = '/'
         return
@@ -134,13 +135,11 @@ export default function DashboardPage() {
 
     if (listError) throw listError
 
-    const { error: memberError } = await supabase
-      .from('list_members')
-      .insert({
-        list_id: newList.id,
-        user_id: uid,
-        role: 'owner',
-      })
+    const { error: memberError } = await supabase.from('list_members').insert({
+      list_id: newList.id,
+      user_id: uid,
+      role: 'owner',
+    })
 
     if (memberError) throw memberError
 
@@ -159,31 +158,29 @@ export default function DashboardPage() {
 
     const { data: memberships, error: membershipError } = await supabase
       .from('list_members')
-      .select('list_id')
+      .select(`
+        list_id,
+        role,
+        lists (
+          id,
+          name,
+          owner_id,
+          created_at
+        )
+      `)
       .eq('user_id', actualUserId)
 
     if (membershipError) throw membershipError
 
-    const ids = (memberships || []).map((m) => m.list_id)
-    if (ids.length === 0) {
-      setLists([])
-      setSelectedListId('')
-      return
-    }
+    const loadedLists = (memberships || [])
+      .map((m: any) => m.lists)
+      .filter(Boolean) as ListRow[]
 
-    const { data, error } = await supabase
-      .from('lists')
-      .select('*')
-      .in('id', ids)
-      .order('created_at', { ascending: true })
-
-    if (error) throw error
-
-    setLists(data || [])
+    setLists(loadedLists)
 
     setSelectedListId((current) => {
-      if (current && (data || []).some((l) => l.id === current)) return current
-      return data?.[0]?.id || ''
+      if (current && loadedLists.some((l) => l.id === current)) return current
+      return loadedLists?.[0]?.id || ''
     })
   }
 
@@ -242,13 +239,11 @@ export default function DashboardPage() {
 
       if (listError) throw listError
 
-      const { error: memberError } = await supabase
-        .from('list_members')
-        .insert({
-          list_id: list.id,
-          user_id: userId,
-          role: 'owner',
-        })
+      const { error: memberError } = await supabase.from('list_members').insert({
+        list_id: list.id,
+        user_id: userId,
+        role: 'owner',
+      })
 
       if (memberError) throw memberError
 
@@ -377,13 +372,11 @@ export default function DashboardPage() {
         throw new Error('That user must sign in once before you can invite them.')
       }
 
-      const { error: insertError } = await supabase
-        .from('list_members')
-        .insert({
-          list_id: selectedListId,
-          user_id: profile.id,
-          role: 'member',
-        })
+      const { error: insertError } = await supabase.from('list_members').insert({
+        list_id: selectedListId,
+        user_id: profile.id,
+        role: 'editor',
+      })
 
       if (insertError) {
         if (insertError.message.toLowerCase().includes('duplicate')) {
