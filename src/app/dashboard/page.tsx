@@ -688,7 +688,7 @@ export default function DashboardPage() {
                             </div>
                           </div>
 
-                          <div style={styles.expandHint}>{isExpanded ? 'Hide' : 'Open'}</div>
+                          <div style={styles.expandHint}></div>
                         </div>
 
                         {isExpanded ? (
