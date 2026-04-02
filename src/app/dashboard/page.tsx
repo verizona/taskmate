@@ -3,45 +3,35 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-export default function Home() {
-  const [loading, setLoading] = useState(false);
-  const [checkingSession, setCheckingSession] = useState(true);
+export default function DashboardPage() {
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState<string | null>(null);
 
   useEffect(() => {
-    checkSession();
+    async function loadSession() {
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession();
+
+      if (error || !session) {
+        window.location.href = "/";
+        return;
+      }
+
+      setEmail(session.user.email ?? null);
+      setLoading(false);
+    }
+
+    loadSession();
   }, []);
 
-  async function checkSession() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (session) {
-      window.location.href = "/dashboard";
-      return;
-    }
-
-    setCheckingSession(false);
+  async function signOut() {
+    await supabase.auth.signOut();
+    window.location.href = "/";
   }
 
-  async function signIn() {
-    setLoading(true);
-
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/dashboard`,
-      },
-    });
-
-    setLoading(false);
-
-    if (error) {
-      alert(error.message);
-    }
-  }
-
-  if (checkingSession) {
+  if (loading) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-black text-white">
         <div className="text-zinc-400 text-lg">Loading TaskMate...</div>
@@ -50,17 +40,18 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-black px-6 text-white">
-      <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-zinc-950/90 p-8 shadow-2xl shadow-black/40">
-        <h1 className="text-4xl font-semibold tracking-tight">TaskMate</h1>
-        <p className="mt-3 text-zinc-400">Shared tasks. Simple teamwork.</p>
+    <main className="min-h-screen bg-black px-6 py-10 text-white">
+      <div className="mx-auto max-w-3xl">
+        <h1 className="text-3xl font-semibold">Dashboard</h1>
+        <p className="mt-3 text-zinc-400">
+          Signed in as {email ?? "unknown user"}
+        </p>
 
         <button
-          onClick={signIn}
-          disabled={loading}
-          className="mt-8 w-full rounded-2xl bg-white px-4 py-3 font-medium text-black hover:bg-zinc-200"
+          onClick={signOut}
+          className="mt-6 rounded-2xl bg-white px-4 py-3 font-medium text-black hover:bg-zinc-200"
         >
-          {loading ? "Please wait..." : "Continue with Google"}
+          Sign out
         </button>
       </div>
     </main>
