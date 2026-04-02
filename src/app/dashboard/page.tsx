@@ -21,6 +21,11 @@ type List = {
   created_at?: string;
 };
 
+type Membership = {
+  list_id: string;
+  role: "owner" | "editor" | "viewer";
+};
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
@@ -28,62 +33,107 @@ export default function DashboardPage() {
 
   const [lists, setLists] = useState<List[]>([]);
   const [selectedListId, setSelectedListId] = useState<string>("");
-  const [newListName, setNewListName] = useState("");
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState("");
+  const [newListName, setNewListName] = useState("");
+
   const [savingTask, setSavingTask] = useState(false);
   const [savingList, setSavingList] = useState(false);
 
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+
   useEffect(() => {
-    loadSessionAndData();
+    loadDashboard();
   }, []);
 
   useEffect(() => {
     if (selectedListId) {
-      loadTasks(selectedListId);
+      loadTasksForList(selectedListId);
+    } else {
+      setTasks([]);
     }
   }, [selectedListId]);
 
-  async function loadSessionAndData() {
+  async function loadDashboard() {
+    setLoading(true);
+
     const {
       data: { session },
-      error,
+      error: sessionError,
     } = await supabase.auth.getSession();
 
-    if (error || !session) {
+    if (sessionError || !session) {
       window.location.href = "/";
       return;
     }
 
-    setEmail(session.user.email ?? null);
-    setUserId(session.user.id);
+    const user = session.user;
+    setEmail(user.email ?? null);
+    setUserId(user.id);
 
-    const { data: ownedLists, error: listsError } = await supabase
-      .from("lists")
-      .select("id, name, owner_id, created_at")
-      .order("created_at", { ascending: true });
+    const { data: membershipData, error: membershipError } = await supabase
+      .from("list_members")
+      .select("list_id, role")
+      .eq("user_id", user.id);
 
-    if (listsError) {
-      alert(listsError.message);
+    if (membershipError) {
+      alert(membershipError.message);
       setLoading(false);
       return;
     }
 
-    const normalizedLists = (ownedLists ?? []) as List[];
-    setLists(normalizedLists);
+    const memberRows = (membershipData ?? []) as Membership[];
+    setMemberships(memberRows);
 
-    if (normalizedLists.length > 0) {
-      setSelectedListId(normalizedLists[0].id);
+    const listIds = memberRows.map((m) => m.list_id);
+
+    if (listIds.length === 0) {
+      setLists([]);
+      setSelectedListId("");
+      setTasks([]);
+      setLoading(false);
+      return;
+    }
+
+    const { data: listData, error: listError } = await supabase
+      .from("lists")
+      .select("id, name, owner_id, created_at")
+      .in("id", listIds)
+      .order("created_at", { ascending: true });
+
+    if (listError) {
+      alert(listError.message);
+      setLoading(false);
+      return;
+    }
+
+    const loadedLists = (listData ?? []) as List[];
+    setLists(loadedLists);
+
+    const stillValidSelected = loadedLists.some((l) => l.id === selectedListId);
+
+    const nextSelectedListId = stillValidSelected
+      ? selectedListId
+      : loadedLists[0]?.id ?? "";
+
+    setSelectedListId(nextSelectedListId);
+
+    if (nextSelectedListId) {
+      await loadTasksForList(nextSelectedListId);
+    } else {
+      setTasks([]);
     }
 
     setLoading(false);
   }
 
-  async function loadTasks(listId: string) {
+  async function loadTasksForList(listId: string) {
     const { data, error } = await supabase
       .from("tasks")
-      .select("id, title, is_completed, user_id, created_at, due_date, priority, list_id")
+      .select(
+        "id, title, is_completed, user_id, created_at, due_date, priority, list_id"
+      )
       .eq("list_id", listId)
       .order("created_at", { ascending: false });
 
@@ -95,33 +145,63 @@ export default function DashboardPage() {
     setTasks((data ?? []) as Task[]);
   }
 
+  function currentRole(): "owner" | "editor" | "viewer" | null {
+    const membership = memberships.find((m) => m.list_id === selectedListId);
+    return membership?.role ?? null;
+  }
+
+  function canEditCurrentList() {
+    const role = currentRole();
+    return role === "owner" || role === "editor";
+  }
+
   async function createList() {
     const name = newListName.trim();
     if (!name || !userId) return;
 
     setSavingList(true);
 
-    const { data, error } = await supabase
+    const { data: createdList, error: listError } = await supabase
       .from("lists")
       .insert([{ name, owner_id: userId }])
       .select()
       .single();
 
-    if (error) {
-      alert(error.message);
-    } else if (data) {
-      const created = data as List;
-      setLists((prev) => [...prev, created]);
-      setNewListName("");
-      setSelectedListId(created.id);
+    if (listError) {
+      alert(listError.message);
+      setSavingList(false);
+      return;
     }
 
+    const newList = createdList as List;
+
+    const { error: memberError } = await supabase.from("list_members").insert([
+      {
+        list_id: newList.id,
+        user_id: userId,
+        role: "owner",
+      },
+    ]);
+
+    if (memberError) {
+      alert(memberError.message);
+      setSavingList(false);
+      return;
+    }
+
+    setNewListName("");
+    await loadDashboard();
+    setSelectedListId(newList.id);
     setSavingList(false);
   }
 
   async function addTask() {
     const title = newTask.trim();
     if (!title || !userId || !selectedListId) return;
+    if (!canEditCurrentList()) {
+      alert("You do not have permission to add tasks to this list.");
+      return;
+    }
 
     setSavingTask(true);
 
@@ -149,6 +229,11 @@ export default function DashboardPage() {
   }
 
   async function toggleTask(taskId: string, currentValue: boolean) {
+    if (!canEditCurrentList()) {
+      alert("You do not have permission to change tasks in this list.");
+      return;
+    }
+
     const { error } = await supabase
       .from("tasks")
       .update({ is_completed: !currentValue })
@@ -161,12 +246,19 @@ export default function DashboardPage() {
 
     setTasks((prev) =>
       prev.map((task) =>
-        task.id === taskId ? { ...task, is_completed: !currentValue } : task
+        task.id === taskId
+          ? { ...task, is_completed: !currentValue }
+          : task
       )
     );
   }
 
   async function deleteTask(taskId: string) {
+    if (!canEditCurrentList()) {
+      alert("You do not have permission to delete tasks from this list.");
+      return;
+    }
+
     const { error } = await supabase.from("tasks").delete().eq("id", taskId);
 
     if (error) {
@@ -190,9 +282,13 @@ export default function DashboardPage() {
     );
   }
 
+  const selectedList = lists.find((l) => l.id === selectedListId);
+  const role = currentRole();
+  const canEdit = canEditCurrentList();
+
   return (
     <main className="min-h-screen bg-black px-6 py-10 text-white">
-      <div className="mx-auto max-w-5xl">
+      <div className="mx-auto max-w-7xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-5xl font-semibold tracking-tight">TaskMate</h1>
@@ -238,27 +334,47 @@ export default function DashboardPage() {
                   No lists yet.
                 </div>
               ) : (
-                lists.map((list) => (
-                  <button
-                    key={list.id}
-                    onClick={() => setSelectedListId(list.id)}
-                    className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                      selectedListId === list.id
-                        ? "border-white/30 bg-white/10 text-white"
-                        : "border-white/10 bg-black/30 text-zinc-300 hover:bg-white/5"
-                    }`}
-                  >
-                    {list.name || "Untitled List"}
-                  </button>
-                ))
+                lists.map((list) => {
+                  const listMembership = memberships.find(
+                    (m) => m.list_id === list.id
+                  );
+
+                  return (
+                    <button
+                      key={list.id}
+                      onClick={() => setSelectedListId(list.id)}
+                      className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                        selectedListId === list.id
+                          ? "border-white/30 bg-white/10 text-white"
+                          : "border-white/10 bg-black/30 text-zinc-300 hover:bg-white/5"
+                      }`}
+                    >
+                      <div className="font-medium">
+                        {list.name || "Untitled List"}
+                      </div>
+                      <div className="mt-1 text-xs uppercase tracking-wide text-zinc-500">
+                        {listMembership?.role ?? "member"}
+                      </div>
+                    </button>
+                  );
+                })
               )}
             </div>
           </section>
 
           <section className="rounded-[28px] border border-white/10 bg-zinc-950/90 p-6 shadow-2xl shadow-black/40">
-            <h2 className="text-2xl font-semibold">
-              {lists.find((l) => l.id === selectedListId)?.name || "My Tasks"}
-            </h2>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-semibold">
+                  {selectedList?.name || "My Tasks"}
+                </h2>
+                {role && (
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Your role: {role}
+                  </p>
+                )}
+              </div>
+            </div>
 
             <div className="mt-6 flex gap-3">
               <input
@@ -267,12 +383,17 @@ export default function DashboardPage() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") addTask();
                 }}
-                placeholder="Add a new task..."
-                className="flex-1 rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none placeholder:text-zinc-500"
+                placeholder={
+                  selectedListId
+                    ? "Add a new task..."
+                    : "Select or create a list first..."
+                }
+                disabled={!selectedListId || !canEdit}
+                className="flex-1 rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none placeholder:text-zinc-500 disabled:opacity-50"
               />
               <button
                 onClick={addTask}
-                disabled={savingTask || !selectedListId}
+                disabled={savingTask || !selectedListId || !canEdit}
                 className="rounded-2xl bg-white px-5 py-3 font-medium text-black hover:bg-zinc-200 disabled:opacity-60"
               >
                 {savingTask ? "Adding..." : "Add"}
@@ -295,6 +416,7 @@ export default function DashboardPage() {
                         type="checkbox"
                         checked={task.is_completed}
                         onChange={() => toggleTask(task.id, task.is_completed)}
+                        disabled={!canEdit}
                         className="h-5 w-5"
                       />
                       <div>
@@ -320,7 +442,8 @@ export default function DashboardPage() {
 
                     <button
                       onClick={() => deleteTask(task.id)}
-                      className="rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 hover:bg-white/5"
+                      disabled={!canEdit}
+                      className="rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 hover:bg-white/5 disabled:opacity-50"
                     >
                       Delete
                     </button>
