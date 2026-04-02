@@ -10,23 +10,16 @@ export default function AuthCallbackPage() {
   useEffect(() => {
     const handleAuth = async () => {
       try {
-        const url = new URL(window.location.href);
-        const code = url.searchParams.get("code");
+        // 🔥 This handles BOTH cases automatically
+        const { data, error } = await supabase.auth.getSession();
 
-        if (code) {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) {
-            console.error("exchangeCodeForSession error:", error.message);
-            router.replace("/");
-            return;
-          }
+        if (error) {
+          console.error("Session error:", error.message);
+          router.replace("/");
+          return;
         }
 
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (session) {
+        if (data.session) {
           router.replace("/dashboard");
         } else {
           router.replace("/");
