@@ -4,11 +4,14 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type Task = {
-  id: number;
+  id: string;
   title: string;
-  is_complete: boolean;
+  is_completed: boolean;
   user_id: string;
   created_at?: string;
+  due_date?: string | null;
+  priority?: string | null;
+  list_id?: string | null;
 };
 
 export default function DashboardPage() {
@@ -39,12 +42,16 @@ export default function DashboardPage() {
 
     const { data: taskData, error: taskError } = await supabase
       .from("tasks")
-      .select("id, title, is_complete, user_id, created_at")
+      .select(
+        "id, title, is_completed, user_id, created_at, due_date, priority, list_id"
+      )
       .eq("user_id", session.user.id)
       .order("created_at", { ascending: false });
 
-    if (!taskError && taskData) {
-      setTasks(taskData);
+    if (taskError) {
+      alert(taskError.message);
+    } else if (taskData) {
+      setTasks(taskData as Task[]);
     }
 
     setLoading(false);
@@ -62,26 +69,26 @@ export default function DashboardPage() {
         {
           title,
           user_id: userId,
-          is_complete: false,
+          is_completed: false,
         },
       ])
       .select()
       .single();
 
-    if (!error && data) {
+    if (error) {
+      alert(error.message);
+    } else if (data) {
       setTasks((prev) => [data as Task, ...prev]);
       setNewTask("");
-    } else if (error) {
-      alert(error.message);
     }
 
     setSaving(false);
   }
 
-  async function toggleTask(taskId: number, currentValue: boolean) {
+  async function toggleTask(taskId: string, currentValue: boolean) {
     const { error } = await supabase
       .from("tasks")
-      .update({ is_complete: !currentValue })
+      .update({ is_completed: !currentValue })
       .eq("id", taskId);
 
     if (error) {
@@ -92,13 +99,13 @@ export default function DashboardPage() {
     setTasks((prev) =>
       prev.map((task) =>
         task.id === taskId
-          ? { ...task, is_complete: !currentValue }
+          ? { ...task, is_completed: !currentValue }
           : task
       )
     );
   }
 
-  async function deleteTask(taskId: number) {
+  async function deleteTask(taskId: string) {
     const { error } = await supabase.from("tasks").delete().eq("id", taskId);
 
     if (error) {
@@ -177,19 +184,31 @@ export default function DashboardPage() {
                   <div className="flex items-center gap-3">
                     <input
                       type="checkbox"
-                      checked={task.is_complete}
-                      onChange={() => toggleTask(task.id, task.is_complete)}
+                      checked={task.is_completed}
+                      onChange={() =>
+                        toggleTask(task.id, task.is_completed)
+                      }
                       className="h-5 w-5"
                     />
-                    <span
-                      className={
-                        task.is_complete
-                          ? "text-zinc-500 line-through"
-                          : "text-white"
-                      }
-                    >
-                      {task.title}
-                    </span>
+                    <div>
+                      <div
+                        className={
+                          task.is_completed
+                            ? "text-zinc-500 line-through"
+                            : "text-white"
+                        }
+                      >
+                        {task.title}
+                      </div>
+
+                      {(task.priority || task.due_date) && (
+                        <div className="mt-1 text-sm text-zinc-500">
+                          {task.priority ? `Priority: ${task.priority}` : ""}
+                          {task.priority && task.due_date ? " • " : ""}
+                          {task.due_date ? `Due: ${task.due_date}` : ""}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <button
