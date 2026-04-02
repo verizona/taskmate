@@ -34,6 +34,8 @@ type MemberRow = {
   } | null
 }
 
+type ViewMode = 'today' | 'all' | 'new' | 'completed' | 'lists'
+
 function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(false)
 
@@ -62,6 +64,21 @@ function formatReminder(minutes: number | null | undefined) {
   return `${minutes} min before`
 }
 
+function formatDueDate(dateString: string | null | undefined) {
+  if (!dateString) return 'No due date'
+  const d = new Date(`${dateString}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return dateString
+  return d.toLocaleDateString()
+}
+
+function todayYMD() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 export default function DashboardPage() {
   const [userId, setUserId] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState<string>('')
@@ -71,6 +88,8 @@ export default function DashboardPage() {
   const [selectedListId, setSelectedListId] = useState<string>('')
   const [tasks, setTasks] = useState<TaskRow[]>([])
   const [members, setMembers] = useState<MemberRow[]>([])
+
+  const [viewMode, setViewMode] = useState<ViewMode>('all')
 
   const [newListName, setNewListName] = useState('')
   const [newTaskTitle, setNewTaskTitle] = useState('')
@@ -89,6 +108,7 @@ export default function DashboardPage() {
 
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [deletingList, setDeletingList] = useState(false)
 
   const isMobile = useIsMobile()
 
@@ -285,6 +305,7 @@ export default function DashboardPage() {
       setNewListName('')
       await loadLists()
       setSelectedListId(list.id)
+      setViewMode('lists')
       setMessage('List created')
     } catch (e: any) {
       setError(e.message || 'Failed to create list')
@@ -326,6 +347,7 @@ export default function DashboardPage() {
       setNewTaskPriority('medium')
       setNewTaskReminder('60')
       await loadTasks(selectedListId)
+      setViewMode('all')
       setMessage('Task added')
     } catch (e: any) {
       setError(e.message || 'Failed to add task')
@@ -334,13 +356,19 @@ export default function DashboardPage() {
 
   async function toggleTask(task: TaskRow) {
     try {
+      const nextComplete = !task.is_complete
       const { error } = await supabase
         .from('tasks')
-        .update({ is_complete: !task.is_complete })
+        .update({ is_complete: nextComplete })
         .eq('id', task.id)
 
       if (error) throw error
+
+      if (expandedTaskId === task.id) setExpandedTaskId(null)
+      if (editingTaskId === task.id) cancelEdit()
+
       await loadTasks(selectedListId)
+      setMessage(nextComplete ? 'Task completed' : 'Task reopened')
     } catch (e: any) {
       setError(e.message || 'Failed to update task')
     }
@@ -470,6 +498,74 @@ export default function DashboardPage() {
     }
   }
 
+  async function leaveCurrentList() {
+    try {
+      if (!userId || !selectedListId) return
+      const currentList = lists.find((l) => l.id === selectedListId)
+      if (!currentList) return
+      if (currentList.owner_id === userId) {
+        setError('Owners cannot leave their own list. Delete it instead.')
+        return
+      }
+
+      setError('')
+      setMessage('')
+
+      const { error } = await supabase
+        .from('list_members')
+        .delete()
+        .eq('list_id', selectedListId)
+        .eq('user_id', userId)
+
+      if (error) throw error
+
+      await loadLists()
+      setViewMode('lists')
+      setMessage('You left the list')
+    } catch (e: any) {
+      setError(e.message || 'Failed to leave list')
+    }
+  }
+
+  async function deleteCurrentList() {
+    try {
+      if (!selectedListId) return
+      if (!userId) return
+      const currentList = lists.find((l) => l.id === selectedListId)
+      if (!currentList) return
+      if (currentList.owner_id !== userId) {
+        setError('Only the owner can delete this list.')
+        return
+      }
+
+      const ok = window.confirm(
+        `Delete list "${currentList.name}"? This will remove its tasks and memberships.`
+      )
+      if (!ok) return
+
+      setDeletingList(true)
+      setError('')
+      setMessage('')
+
+      const { error } = await supabase
+        .from('lists')
+        .delete()
+        .eq('id', selectedListId)
+
+      if (error) throw error
+
+      setExpandedTaskId(null)
+      setEditingTaskId(null)
+      await loadLists()
+      setViewMode('lists')
+      setMessage('List deleted')
+    } catch (e: any) {
+      setError(e.message || 'Failed to delete list')
+    } finally {
+      setDeletingList(false)
+    }
+  }
+
   async function signOut() {
     await supabase.auth.signOut()
     window.location.href = '/'
@@ -485,6 +581,33 @@ export default function DashboardPage() {
   )
 
   const isOwner = !!selectedList && selectedList.owner_id === userId
+  const currentUserMembership = useMemo(
+    () => members.find((m) => m.user_id === userId) || null,
+    [members, userId]
+  )
+
+  const todayKey = todayYMD()
+
+  const activeTasks = useMemo(
+    () => tasks.filter((t) => !t.is_complete),
+    [tasks]
+  )
+
+  const completedTasks = useMemo(
+    () => tasks.filter((t) => t.is_complete),
+    [tasks]
+  )
+
+  const todayTasks = useMemo(
+    () => activeTasks.filter((t) => t.due_date === todayKey),
+    [activeTasks, todayKey]
+  )
+
+  const visibleTasks = useMemo(() => {
+    if (viewMode === 'today') return todayTasks
+    if (viewMode === 'completed') return completedTasks
+    return activeTasks
+  }, [viewMode, todayTasks, completedTasks, activeTasks])
 
   if (loading) {
     return (
@@ -523,12 +646,81 @@ export default function DashboardPage() {
 
         <div
           style={{
+            ...styles.summaryGrid,
+            ...(isMobile ? styles.summaryGridMobile : {}),
+          }}
+        >
+          <button
+            style={{
+              ...styles.summaryCard,
+              ...styles.summaryToday,
+              ...(viewMode === 'today' ? styles.summaryCardActive : {}),
+            }}
+            onClick={() => setViewMode('today')}
+          >
+            <div style={styles.summaryCount}>{todayTasks.length}</div>
+            <div style={styles.summaryLabel}>Today</div>
+          </button>
+
+          <button
+            style={{
+              ...styles.summaryCard,
+              ...styles.summaryAll,
+              ...(viewMode === 'all' ? styles.summaryCardActive : {}),
+            }}
+            onClick={() => setViewMode('all')}
+          >
+            <div style={styles.summaryCount}>{activeTasks.length}</div>
+            <div style={styles.summaryLabel}>All</div>
+          </button>
+
+          <button
+            style={{
+              ...styles.summaryCard,
+              ...styles.summaryNew,
+              ...(viewMode === 'new' ? styles.summaryCardActive : {}),
+            }}
+            onClick={() => setViewMode('new')}
+          >
+            <div style={styles.summaryCount}>＋</div>
+            <div style={styles.summaryLabel}>New Task</div>
+          </button>
+
+          <button
+            style={{
+              ...styles.summaryCard,
+              ...styles.summaryCompleted,
+              ...(viewMode === 'completed' ? styles.summaryCardActive : {}),
+            }}
+            onClick={() => setViewMode('completed')}
+          >
+            <div style={styles.summaryCount}>{completedTasks.length}</div>
+            <div style={styles.summaryLabel}>Completed</div>
+          </button>
+
+          <button
+            style={{
+              ...styles.summaryCard,
+              ...styles.summaryLists,
+              ...(viewMode === 'lists' ? styles.summaryCardActive : {}),
+            }}
+            onClick={() => setViewMode('lists')}
+          >
+            <div style={styles.summaryCount}>{lists.length}</div>
+            <div style={styles.summaryLabel}>Lists</div>
+          </button>
+        </div>
+
+        <div
+          style={{
             ...styles.grid,
             ...(isMobile ? styles.gridMobile : {}),
           }}
         >
           <section style={styles.sidebar}>
-            <h2 style={styles.sectionTitle}>Your Lists</h2>
+            <div style={styles.listSectionTop}>
+              <h2 style={styles.sectionTitle}>Your Lists</h2>
+            </div>
 
             <div style={{ ...styles.row, ...(isMobile ? styles.stackColumn : {}) }}>
               <input
@@ -549,7 +741,10 @@ export default function DashboardPage() {
               {lists.map((list) => (
                 <button
                   key={list.id}
-                  onClick={() => setSelectedListId(list.id)}
+                  onClick={() => {
+                    setSelectedListId(list.id)
+                    setViewMode('all')
+                  }}
                   style={{
                     ...styles.listButton,
                     ...(selectedListId === list.id ? styles.listButtonActive : {}),
@@ -565,310 +760,364 @@ export default function DashboardPage() {
           </section>
 
           <section style={styles.main}>
-            <div style={styles.panel}>
-              <h2 style={styles.sectionTitle}>
-                {selectedList ? `Tasks · ${selectedList.name}` : 'Tasks'}
-              </h2>
+            {(viewMode === 'new' || viewMode === 'all' || viewMode === 'today' || viewMode === 'completed') && selectedList ? (
+              <div style={styles.panel}>
+                <h2 style={styles.sectionTitle}>
+                  {selectedList ? `Tasks · ${selectedList.name}` : 'Tasks'}
+                </h2>
 
-              <div
-                style={{
-                  ...styles.taskComposerCompact,
-                  ...(isMobile ? styles.taskComposerCompactMobile : {}),
-                }}
-              >
-                <input
-                  style={{
-                    ...styles.input,
-                    flex: isMobile ? undefined : 2,
-                    ...(isMobile ? styles.fullWidthInput : {}),
-                  }}
-                  placeholder="New task..."
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                />
+                {(viewMode === 'new' || viewMode === 'all' || viewMode === 'today') ? (
+                  <div
+                    style={{
+                      ...styles.taskComposerCompact,
+                      ...(isMobile ? styles.taskComposerCompactMobile : {}),
+                    }}
+                  >
+                    <input
+                      style={{
+                        ...styles.input,
+                        flex: isMobile ? undefined : 2,
+                        ...(isMobile ? styles.fullWidthInput : {}),
+                      }}
+                      placeholder="New task..."
+                      value={newTaskTitle}
+                      onChange={(e) => setNewTaskTitle(e.target.value)}
+                    />
 
-                <input
-                  style={{
-                    ...styles.input,
-                    ...(isMobile ? styles.fullWidthInput : {}),
-                  }}
-                  type="date"
-                  value={newTaskDueDate}
-                  onChange={(e) => setNewTaskDueDate(e.target.value)}
-                />
+                    <input
+                      style={{
+                        ...styles.input,
+                        ...(isMobile ? styles.fullWidthInput : {}),
+                      }}
+                      type="date"
+                      value={newTaskDueDate}
+                      onChange={(e) => setNewTaskDueDate(e.target.value)}
+                    />
 
-                <select
-                  style={{
-                    ...styles.input,
-                    ...(isMobile ? styles.fullWidthInput : {}),
-                  }}
-                  value={newTaskReminder}
-                  onChange={(e) => setNewTaskReminder(e.target.value)}
-                >
-                  <option value="0">At time</option>
-                  <option value="5">5 min before</option>
-                  <option value="10">10 min before</option>
-                  <option value="15">15 min before</option>
-                  <option value="30">30 min before</option>
-                  <option value="60">1 hour before</option>
-                  <option value="120">2 hours before</option>
-                  <option value="1440">1 day before</option>
-                  <option value="2880">2 days before</option>
-                  <option value="10080">1 week before</option>
-                </select>
+                    <select
+                      style={{
+                        ...styles.input,
+                        ...(isMobile ? styles.fullWidthInput : {}),
+                      }}
+                      value={newTaskReminder}
+                      onChange={(e) => setNewTaskReminder(e.target.value)}
+                    >
+                      <option value="0">At time</option>
+                      <option value="5">5 min before</option>
+                      <option value="10">10 min before</option>
+                      <option value="15">15 min before</option>
+                      <option value="30">30 min before</option>
+                      <option value="60">1 hour before</option>
+                      <option value="120">2 hours before</option>
+                      <option value="1440">1 day before</option>
+                      <option value="2880">2 days before</option>
+                      <option value="10080">1 week before</option>
+                    </select>
 
-                <select
-                  style={{
-                    ...styles.input,
-                    ...(isMobile ? styles.fullWidthInput : {}),
-                  }}
-                  value={newTaskPriority}
-                  onChange={(e) => setNewTaskPriority(e.target.value)}
-                >
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
+                    <select
+                      style={{
+                        ...styles.input,
+                        ...(isMobile ? styles.fullWidthInput : {}),
+                      }}
+                      value={newTaskPriority}
+                      onChange={(e) => setNewTaskPriority(e.target.value)}
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
 
-                <button
-                  style={{
-                    ...styles.button,
-                    ...(isMobile ? styles.fullWidthButton : {}),
-                  }}
-                  onClick={addTask}
-                >
-                  Add
-                </button>
-              </div>
+                    <button
+                      style={{
+                        ...styles.button,
+                        ...(isMobile ? styles.fullWidthButton : {}),
+                      }}
+                      onClick={addTask}
+                    >
+                      Add
+                    </button>
+                  </div>
+                ) : null}
 
-              <div style={{ marginTop: 16 }}>
-                {tasks.length === 0 ? (
-                  <div style={styles.empty}>No tasks yet.</div>
-                ) : (
-                  tasks.map((task) => {
-                    const isExpanded = expandedTaskId === task.id
-                    const isEditing = editingTaskId === task.id
+                <div style={{ marginTop: 16 }}>
+                  {visibleTasks.length === 0 ? (
+                    <div style={styles.empty}>
+                      {viewMode === 'today'
+                        ? 'No tasks for today.'
+                        : viewMode === 'completed'
+                        ? 'No completed tasks.'
+                        : 'No tasks yet.'}
+                    </div>
+                  ) : (
+                    visibleTasks.map((task) => {
+                      const isExpanded = expandedTaskId === task.id
+                      const isEditing = editingTaskId === task.id
 
-                    return (
-                      <div key={task.id} style={styles.taskCompactCard}>
-                        <div
-                          style={styles.taskCompactHeader}
-                          onClick={() => toggleExpanded(task.id)}
-                        >
-                          <div style={styles.taskLeft}>
-                            <input
-                              type="checkbox"
-                              checked={task.is_complete}
-                              onChange={(e) => {
-                                e.stopPropagation()
-                                toggleTask(task)
-                              }}
-                              style={styles.checkbox}
-                            />
-                            <div style={styles.taskTextWrap}>
-                              <div
+                      return (
+                        <div key={task.id} style={styles.taskCompactCard}>
+                          <div
+                            style={styles.taskCompactHeader}
+                            onClick={() => toggleExpanded(task.id)}
+                          >
+                            <div style={styles.taskLeft}>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  toggleTask(task)
+                                }}
                                 style={{
-                                  ...styles.taskCompactTitle,
-                                  textDecoration: task.is_complete ? 'line-through' : 'none',
-                                  opacity: task.is_complete ? 0.6 : 1,
+                                  ...styles.circleButton,
+                                  ...(task.is_complete ? styles.circleButtonChecked : {}),
                                 }}
                               >
-                                {task.title}
-                              </div>
+                                {task.is_complete ? '✓' : ''}
+                              </button>
 
-                              <div style={styles.taskCompactMeta}>
-                                <span style={styles.inlineMeta}>
-                                  {task.due_date ? `Due ${task.due_date}` : 'No due date'}
-                                </span>
-                                <span style={styles.inlineMetaDot}>•</span>
-                                <span style={styles.inlineMeta}>
-                                  {formatReminder(task.reminder_minutes)}
-                                </span>
+                              <div style={styles.taskTextWrap}>
+                                <div
+                                  style={{
+                                    ...styles.taskCompactTitle,
+                                    textDecoration: task.is_complete ? 'line-through' : 'none',
+                                    opacity: task.is_complete ? 0.6 : 1,
+                                  }}
+                                >
+                                  {task.title}
+                                </div>
+
+                                <div style={styles.taskCompactMeta}>
+                                  <span style={styles.inlineMeta}>
+                                    {task.due_date
+                                      ? `Due ${formatDueDate(task.due_date)}`
+                                      : 'No due date'}
+                                  </span>
+                                  <span style={styles.inlineMetaDot}>•</span>
+                                  <span style={styles.inlineMeta}>
+                                    {formatReminder(task.reminder_minutes)}
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           </div>
 
-                          <div style={styles.expandHint}></div>
+                          {isExpanded ? (
+                            <div style={styles.taskExpandedArea}>
+                              {isEditing ? (
+                                <div style={styles.editBlock}>
+                                  <input
+                                    style={styles.input}
+                                    value={editTitle}
+                                    onChange={(e) => setEditTitle(e.target.value)}
+                                  />
+
+                                  <input
+                                    style={styles.input}
+                                    type="date"
+                                    value={editDueDate}
+                                    onChange={(e) => setEditDueDate(e.target.value)}
+                                  />
+
+                                  <select
+                                    style={styles.input}
+                                    value={editReminder}
+                                    onChange={(e) => setEditReminder(e.target.value)}
+                                  >
+                                    <option value="0">At time</option>
+                                    <option value="5">5 min before</option>
+                                    <option value="10">10 min before</option>
+                                    <option value="15">15 min before</option>
+                                    <option value="30">30 min before</option>
+                                    <option value="60">1 hour before</option>
+                                    <option value="120">2 hours before</option>
+                                    <option value="1440">1 day before</option>
+                                    <option value="2880">2 days before</option>
+                                    <option value="10080">1 week before</option>
+                                  </select>
+
+                                  <select
+                                    style={styles.input}
+                                    value={editPriority}
+                                    onChange={(e) => setEditPriority(e.target.value)}
+                                  >
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                  </select>
+
+                                  <div
+                                    style={{
+                                      ...styles.row,
+                                      ...(isMobile ? styles.stackColumn : {}),
+                                    }}
+                                  >
+                                    <button
+                                      style={{
+                                        ...styles.button,
+                                        ...(isMobile ? styles.fullWidthButton : {}),
+                                      }}
+                                      onClick={() => saveEdit(task.id)}
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      style={{
+                                        ...styles.secondaryButton,
+                                        ...(isMobile ? styles.fullWidthButton : {}),
+                                      }}
+                                      onClick={cancelEdit}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div style={styles.compactBadges}>
+                                    <span style={styles.metaPill}>
+                                      Priority: {task.priority || 'medium'}
+                                    </span>
+                                    <span style={styles.metaPill}>
+                                      Reminder: {formatReminder(task.reminder_minutes)}
+                                    </span>
+                                  </div>
+
+                                  <div
+                                    style={{
+                                      ...styles.row,
+                                      ...(isMobile ? styles.stackColumn : {}),
+                                      marginTop: 12,
+                                    }}
+                                  >
+                                    <button
+                                      style={{
+                                        ...styles.secondaryButton,
+                                        ...(isMobile ? styles.fullWidthButton : {}),
+                                      }}
+                                      onClick={() => startEdit(task)}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      style={{
+                                        ...styles.dangerButton,
+                                        ...(isMobile ? styles.fullWidthButton : {}),
+                                      }}
+                                      onClick={() => deleteTask(task.id)}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ) : null}
                         </div>
-
-                        {isExpanded ? (
-                          <div style={styles.taskExpandedArea}>
-                            {isEditing ? (
-                              <div style={styles.editBlock}>
-                                <input
-                                  style={styles.input}
-                                  value={editTitle}
-                                  onChange={(e) => setEditTitle(e.target.value)}
-                                />
-
-                                <input
-                                  style={styles.input}
-                                  type="date"
-                                  value={editDueDate}
-                                  onChange={(e) => setEditDueDate(e.target.value)}
-                                />
-
-                                <select
-                                  style={styles.input}
-                                  value={editReminder}
-                                  onChange={(e) => setEditReminder(e.target.value)}
-                                >
-                                  <option value="0">At time</option>
-                                  <option value="5">5 min before</option>
-                                  <option value="10">10 min before</option>
-                                  <option value="15">15 min before</option>
-                                  <option value="30">30 min before</option>
-                                  <option value="60">1 hour before</option>
-                                  <option value="120">2 hours before</option>
-                                  <option value="1440">1 day before</option>
-                                  <option value="2880">2 days before</option>
-                                  <option value="10080">1 week before</option>
-                                </select>
-
-                                <select
-                                  style={styles.input}
-                                  value={editPriority}
-                                  onChange={(e) => setEditPriority(e.target.value)}
-                                >
-                                  <option value="low">Low</option>
-                                  <option value="medium">Medium</option>
-                                  <option value="high">High</option>
-                                </select>
-
-                                <div
-                                  style={{
-                                    ...styles.row,
-                                    ...(isMobile ? styles.stackColumn : {}),
-                                  }}
-                                >
-                                  <button
-                                    style={{
-                                      ...styles.button,
-                                      ...(isMobile ? styles.fullWidthButton : {}),
-                                    }}
-                                    onClick={() => saveEdit(task.id)}
-                                  >
-                                    Save
-                                  </button>
-                                  <button
-                                    style={{
-                                      ...styles.secondaryButton,
-                                      ...(isMobile ? styles.fullWidthButton : {}),
-                                    }}
-                                    onClick={cancelEdit}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                <div style={styles.compactBadges}>
-                                  <span style={styles.metaPill}>
-                                    Priority: {task.priority || 'medium'}
-                                  </span>
-                                  <span style={styles.metaPill}>
-                                    Reminder: {formatReminder(task.reminder_minutes)}
-                                  </span>
-                                </div>
-
-                                <div
-                                  style={{
-                                    ...styles.row,
-                                    ...(isMobile ? styles.stackColumn : {}),
-                                    marginTop: 12,
-                                  }}
-                                >
-                                  <button
-                                    style={{
-                                      ...styles.secondaryButton,
-                                      ...(isMobile ? styles.fullWidthButton : {}),
-                                    }}
-                                    onClick={() => startEdit(task)}
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    style={{
-                                      ...styles.dangerButton,
-                                      ...(isMobile ? styles.fullWidthButton : {}),
-                                    }}
-                                    onClick={() => deleteTask(task.id)}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        ) : null}
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </div>
-
-            <div style={styles.panel}>
-              <h2 style={styles.sectionTitle}>Members / Invite</h2>
-
-              {isOwner ? (
-                <div style={{ ...styles.row, ...(isMobile ? styles.stackColumn : {}) }}>
-                  <input
-                    style={{
-                      ...styles.input,
-                      flex: isMobile ? undefined : 1,
-                      ...(isMobile ? styles.fullWidthInput : {}),
-                    }}
-                    placeholder="Invite by email"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                  />
-                  <button
-                    style={{
-                      ...styles.button,
-                      ...(isMobile ? styles.fullWidthButton : {}),
-                    }}
-                    onClick={inviteMember}
-                  >
-                    Invite
-                  </button>
+                      )
+                    })
+                  )}
                 </div>
-              ) : (
-                <div style={styles.subtle}>Only the list owner can invite members.</div>
-              )}
-
-              <div style={{ marginTop: 12 }}>
-                {members.map((member) => (
-                  <div
-                    key={member.id}
-                    style={{
-                      ...styles.memberRow,
-                      ...(isMobile ? styles.memberRowMobile : {}),
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 700 }}>
-                        {member.profiles?.email || member.user_id}
-                      </div>
-                      <div style={styles.smallText}>{member.role}</div>
-                    </div>
-
-                    {isOwner && member.role !== 'owner' ? (
-                      <button
-                        style={{
-                          ...styles.dangerButton,
-                          ...(isMobile ? styles.fullWidthButton : {}),
-                        }}
-                        onClick={() => removeMember(member)}
-                      >
-                        Remove
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
               </div>
-            </div>
+            ) : null}
+
+            {(viewMode === 'lists' || selectedList) && selectedList ? (
+              <div style={styles.panel}>
+                <div style={styles.listManageHeader}>
+                  <h2 style={styles.sectionTitle}>List Details</h2>
+
+                  {isOwner ? (
+                    <button
+                      style={{
+                        ...styles.dangerButton,
+                        ...(deletingList ? styles.disabledButton : {}),
+                      }}
+                      onClick={deleteCurrentList}
+                      disabled={deletingList}
+                    >
+                      {deletingList ? 'Deleting...' : 'Delete List'}
+                    </button>
+                  ) : (
+                    <button style={styles.secondaryButton} onClick={leaveCurrentList}>
+                      Leave List
+                    </button>
+                  )}
+                </div>
+
+                <div style={styles.detailBox}>
+                  <div style={styles.detailLabel}>List name</div>
+                  <div style={styles.detailValue}>{selectedList.name}</div>
+                </div>
+
+                <div style={styles.detailBox}>
+                  <div style={styles.detailLabel}>Your role</div>
+                  <div style={styles.detailValue}>
+                    {currentUserMembership?.role || (isOwner ? 'owner' : 'member')}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {selectedList ? (
+              <div style={styles.panel}>
+                <h2 style={styles.sectionTitle}>Members / Invite</h2>
+
+                {isOwner ? (
+                  <div style={{ ...styles.row, ...(isMobile ? styles.stackColumn : {}) }}>
+                    <input
+                      style={{
+                        ...styles.input,
+                        flex: isMobile ? undefined : 1,
+                        ...(isMobile ? styles.fullWidthInput : {}),
+                      }}
+                      placeholder="Invite by email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                    />
+                    <button
+                      style={{
+                        ...styles.button,
+                        ...(isMobile ? styles.fullWidthButton : {}),
+                      }}
+                      onClick={inviteMember}
+                    >
+                      Invite
+                    </button>
+                  </div>
+                ) : (
+                  <div style={styles.subtle}>Only the list owner can invite members.</div>
+                )}
+
+                <div style={{ marginTop: 12 }}>
+                  {members.map((member) => (
+                    <div
+                      key={member.id}
+                      style={{
+                        ...styles.memberRow,
+                        ...(isMobile ? styles.memberRowMobile : {}),
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 700 }}>
+                          {member.profiles?.email || member.user_id}
+                        </div>
+                        <div style={styles.smallText}>{member.role}</div>
+                      </div>
+
+                      {isOwner && member.role !== 'owner' ? (
+                        <button
+                          style={{
+                            ...styles.dangerButton,
+                            ...(isMobile ? styles.fullWidthButton : {}),
+                          }}
+                          onClick={() => removeMember(member)}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </section>
         </div>
       </div>
@@ -910,6 +1159,55 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 4,
     wordBreak: 'break-word',
   },
+
+  summaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(5, 1fr)',
+    gap: 16,
+    marginBottom: 20,
+  },
+  summaryGridMobile: {
+    gridTemplateColumns: 'repeat(2, 1fr)',
+  },
+  summaryCard: {
+    border: 'none',
+    borderRadius: 20,
+    padding: '18px 16px',
+    color: '#fff',
+    textAlign: 'left',
+    cursor: 'pointer',
+    minHeight: 112,
+  },
+  summaryCardActive: {
+    outline: '3px solid #111827',
+    outlineOffset: 2,
+  },
+  summaryCount: {
+    fontSize: 34,
+    fontWeight: 700,
+    lineHeight: 1,
+    marginBottom: 12,
+  },
+  summaryLabel: {
+    fontSize: 18,
+    fontWeight: 700,
+  },
+  summaryToday: {
+    background: 'linear-gradient(135deg, #7fb2ff, #4c7ef3)',
+  },
+  summaryAll: {
+    background: 'linear-gradient(135deg, #4a4a4a, #262626)',
+  },
+  summaryNew: {
+    background: 'linear-gradient(135deg, #34d399, #059669)',
+  },
+  summaryCompleted: {
+    background: 'linear-gradient(135deg, #b9bec7, #8f96a3)',
+  },
+  summaryLists: {
+    background: 'linear-gradient(135deg, #f2b66c, #d6943c)',
+  },
+
   grid: {
     display: 'grid',
     gridTemplateColumns: '280px 1fr',
@@ -918,11 +1216,13 @@ const styles: Record<string, React.CSSProperties> = {
   gridMobile: {
     gridTemplateColumns: '1fr',
   },
+
   sidebar: {
     background: '#ffffff',
     borderRadius: 14,
     padding: 16,
     border: '1px solid #d1d5db',
+    height: 'fit-content',
   },
   main: {
     display: 'grid',
@@ -941,6 +1241,36 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: '#111827',
   },
+  listSectionTop: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  listManageHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  detailBox: {
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 10,
+  },
+  detailLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 4,
+  },
+  detailValue: {
+    fontSize: 18,
+    fontWeight: 700,
+    color: '#111827',
+  },
+
   row: {
     display: 'flex',
     gap: 8,
@@ -951,6 +1281,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'stretch',
   },
+
   input: {
     padding: '12px 14px',
     border: '1px solid #cbd5e1',
@@ -963,6 +1294,7 @@ const styles: Record<string, React.CSSProperties> = {
   fullWidthInput: {
     width: '100%',
   },
+
   button: {
     padding: '12px 16px',
     borderRadius: 10,
@@ -993,10 +1325,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontSize: 16,
   },
+  disabledButton: {
+    opacity: 0.6,
+    cursor: 'not-allowed',
+  },
   fullWidthButton: {
     width: '100%',
     justifyContent: 'center',
   },
+
   listButton: {
     width: '100%',
     textAlign: 'left',
@@ -1017,6 +1354,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 16,
     color: '#111827',
   },
+
   taskComposerCompact: {
     display: 'grid',
     gridTemplateColumns: '2fr 1fr 1fr 1fr auto',
@@ -1026,6 +1364,7 @@ const styles: Record<string, React.CSSProperties> = {
   taskComposerCompactMobile: {
     gridTemplateColumns: '1fr',
   },
+
   taskCompactCard: {
     border: '1px solid #d1d5db',
     borderRadius: 14,
@@ -1047,11 +1386,25 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minWidth: 0,
   },
-  checkbox: {
+  circleButton: {
+    width: 24,
+    height: 24,
+    minWidth: 24,
+    borderRadius: '50%',
+    border: '2px solid #9ca3af',
+    background: '#fff',
+    color: '#fff',
+    fontWeight: 700,
+    cursor: 'pointer',
     marginTop: 4,
-    width: 20,
-    height: 20,
-    flexShrink: 0,
+    lineHeight: '18px',
+    textAlign: 'center',
+    padding: 0,
+  },
+  circleButtonChecked: {
+    background: '#2563eb',
+    border: '2px solid #2563eb',
+    color: '#fff',
   },
   taskTextWrap: {
     minWidth: 0,
@@ -1078,13 +1431,6 @@ const styles: Record<string, React.CSSProperties> = {
   inlineMetaDot: {
     color: '#9ca3af',
   },
-  expandHint: {
-    fontSize: 12,
-    fontWeight: 700,
-    color: '#2563eb',
-    flexShrink: 0,
-    paddingTop: 4,
-  },
   taskExpandedArea: {
     marginTop: 12,
     paddingTop: 12,
@@ -1103,6 +1449,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#111827',
     fontWeight: 600,
   },
+
   memberRow: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -1123,6 +1470,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#4b5563',
     marginTop: 4,
   },
+
   success: {
     marginBottom: 12,
     padding: 12,
