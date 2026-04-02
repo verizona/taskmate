@@ -18,6 +18,8 @@ type TaskRow = {
   list_id: string | null
   due_date: string | null
   priority: string | null
+  reminder_minutes: number | null
+  notes?: string | null
   created_at?: string
 }
 
@@ -45,6 +47,21 @@ function useIsMobile(breakpoint = 768) {
   return isMobile
 }
 
+function formatReminder(minutes: number | null | undefined) {
+  if (minutes == null) return 'No reminder'
+  if (minutes === 0) return 'At time'
+  if (minutes === 5) return '5 min before'
+  if (minutes === 10) return '10 min before'
+  if (minutes === 15) return '15 min before'
+  if (minutes === 30) return '30 min before'
+  if (minutes === 60) return '1 hour before'
+  if (minutes === 120) return '2 hours before'
+  if (minutes === 1440) return '1 day before'
+  if (minutes === 2880) return '2 days before'
+  if (minutes === 10080) return '1 week before'
+  return `${minutes} min before`
+}
+
 export default function DashboardPage() {
   const [userId, setUserId] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState<string>('')
@@ -59,13 +76,16 @@ export default function DashboardPage() {
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [newTaskDueDate, setNewTaskDueDate] = useState('')
   const [newTaskPriority, setNewTaskPriority] = useState('medium')
+  const [newTaskReminder, setNewTaskReminder] = useState('60')
 
   const [inviteEmail, setInviteEmail] = useState('')
 
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [editDueDate, setEditDueDate] = useState('')
   const [editPriority, setEditPriority] = useState('medium')
+  const [editReminder, setEditReminder] = useState('60')
 
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -136,7 +156,6 @@ export default function DashboardPage() {
       .limit(1)
 
     if (membershipError) throw membershipError
-
     if (existingMemberships && existingMemberships.length > 0) return
 
     const { data: newList, error: listError } = await supabase
@@ -205,6 +224,7 @@ export default function DashboardPage() {
       .select('*')
       .eq('list_id', listId)
       .order('is_complete', { ascending: true })
+      .order('due_date', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -283,6 +303,11 @@ export default function DashboardPage() {
       setError('')
       setMessage('')
 
+      const reminderValue =
+        newTaskDueDate && newTaskReminder !== ''
+          ? Number(newTaskReminder)
+          : null
+
       const payload = {
         title: newTaskTitle.trim(),
         is_complete: false,
@@ -290,6 +315,7 @@ export default function DashboardPage() {
         list_id: selectedListId,
         due_date: newTaskDueDate || null,
         priority: newTaskPriority || 'medium',
+        reminder_minutes: reminderValue,
       }
 
       const { error } = await supabase.from('tasks').insert(payload)
@@ -298,6 +324,7 @@ export default function DashboardPage() {
       setNewTaskTitle('')
       setNewTaskDueDate('')
       setNewTaskPriority('medium')
+      setNewTaskReminder('60')
       await loadTasks(selectedListId)
       setMessage('Task added')
     } catch (e: any) {
@@ -313,7 +340,6 @@ export default function DashboardPage() {
         .eq('id', task.id)
 
       if (error) throw error
-
       await loadTasks(selectedListId)
     } catch (e: any) {
       setError(e.message || 'Failed to update task')
@@ -322,9 +348,13 @@ export default function DashboardPage() {
 
   function startEdit(task: TaskRow) {
     setEditingTaskId(task.id)
+    setExpandedTaskId(task.id)
     setEditTitle(task.title)
     setEditDueDate(task.due_date || '')
     setEditPriority(task.priority || 'medium')
+    setEditReminder(
+      task.reminder_minutes == null ? '60' : String(task.reminder_minutes)
+    )
   }
 
   function cancelEdit() {
@@ -332,16 +362,21 @@ export default function DashboardPage() {
     setEditTitle('')
     setEditDueDate('')
     setEditPriority('medium')
+    setEditReminder('60')
   }
 
   async function saveEdit(taskId: string) {
     try {
+      const reminderValue =
+        editDueDate && editReminder !== '' ? Number(editReminder) : null
+
       const { error } = await supabase
         .from('tasks')
         .update({
           title: editTitle.trim(),
           due_date: editDueDate || null,
           priority: editPriority || 'medium',
+          reminder_minutes: reminderValue,
         })
         .eq('id', taskId)
 
@@ -359,6 +394,9 @@ export default function DashboardPage() {
     try {
       const { error } = await supabase.from('tasks').delete().eq('id', taskId)
       if (error) throw error
+
+      if (expandedTaskId === taskId) setExpandedTaskId(null)
+      if (editingTaskId === taskId) cancelEdit()
 
       await loadTasks(selectedListId)
       setMessage('Task deleted')
@@ -437,6 +475,10 @@ export default function DashboardPage() {
     window.location.href = '/'
   }
 
+  function toggleExpanded(taskId: string) {
+    setExpandedTaskId((current) => (current === taskId ? null : taskId))
+  }
+
   const selectedList = useMemo(
     () => lists.find((l) => l.id === selectedListId) || null,
     [lists, selectedListId]
@@ -488,26 +530,15 @@ export default function DashboardPage() {
           <section style={styles.sidebar}>
             <h2 style={styles.sectionTitle}>Your Lists</h2>
 
-            <div
-              style={{
-                ...styles.row,
-                ...(isMobile ? styles.stackColumn : {}),
-              }}
-            >
+            <div style={{ ...styles.row, ...(isMobile ? styles.stackColumn : {}) }}>
               <input
-                style={{
-                  ...styles.input,
-                  ...(isMobile ? styles.fullWidthInput : {}),
-                }}
+                style={{ ...styles.input, ...(isMobile ? styles.fullWidthInput : {}) }}
                 placeholder="New list name"
                 value={newListName}
                 onChange={(e) => setNewListName(e.target.value)}
               />
               <button
-                style={{
-                  ...styles.button,
-                  ...(isMobile ? styles.fullWidthButton : {}),
-                }}
+                style={{ ...styles.button, ...(isMobile ? styles.fullWidthButton : {}) }}
                 onClick={createList}
               >
                 Create
@@ -524,7 +555,7 @@ export default function DashboardPage() {
                     ...(selectedListId === list.id ? styles.listButtonActive : {}),
                   }}
                 >
-                  <div style={{ fontWeight: 700 }}>{list.name}</div>
+                  <div style={styles.listName}>{list.name}</div>
                   <div style={styles.smallText}>
                     {list.owner_id === userId ? 'Owner' : 'Shared with you'}
                   </div>
@@ -541,8 +572,8 @@ export default function DashboardPage() {
 
               <div
                 style={{
-                  ...styles.taskComposer,
-                  ...(isMobile ? styles.taskComposerMobile : {}),
+                  ...styles.taskComposerCompact,
+                  ...(isMobile ? styles.taskComposerCompactMobile : {}),
                 }}
               >
                 <input
@@ -555,6 +586,7 @@ export default function DashboardPage() {
                   value={newTaskTitle}
                   onChange={(e) => setNewTaskTitle(e.target.value)}
                 />
+
                 <input
                   style={{
                     ...styles.input,
@@ -564,6 +596,27 @@ export default function DashboardPage() {
                   value={newTaskDueDate}
                   onChange={(e) => setNewTaskDueDate(e.target.value)}
                 />
+
+                <select
+                  style={{
+                    ...styles.input,
+                    ...(isMobile ? styles.fullWidthInput : {}),
+                  }}
+                  value={newTaskReminder}
+                  onChange={(e) => setNewTaskReminder(e.target.value)}
+                >
+                  <option value="0">At time</option>
+                  <option value="5">5 min before</option>
+                  <option value="10">10 min before</option>
+                  <option value="15">15 min before</option>
+                  <option value="30">30 min before</option>
+                  <option value="60">1 hour before</option>
+                  <option value="120">2 hours before</option>
+                  <option value="1440">1 day before</option>
+                  <option value="2880">2 days before</option>
+                  <option value="10080">1 week before</option>
+                </select>
+
                 <select
                   style={{
                     ...styles.input,
@@ -576,6 +629,7 @@ export default function DashboardPage() {
                   <option value="medium">Medium</option>
                   <option value="high">High</option>
                 </select>
+
                 <button
                   style={{
                     ...styles.button,
@@ -587,129 +641,170 @@ export default function DashboardPage() {
                 </button>
               </div>
 
-              <div style={{ marginTop: 14 }}>
+              <div style={{ marginTop: 16 }}>
                 {tasks.length === 0 ? (
                   <div style={styles.empty}>No tasks yet.</div>
                 ) : (
-                  tasks.map((task) => (
-                    <div key={task.id} style={styles.taskCard}>
-                      {editingTaskId === task.id ? (
-                        <div style={styles.editBlock}>
-                          <input
-                            style={styles.input}
-                            value={editTitle}
-                            onChange={(e) => setEditTitle(e.target.value)}
-                          />
-                          <input
-                            style={styles.input}
-                            type="date"
-                            value={editDueDate}
-                            onChange={(e) => setEditDueDate(e.target.value)}
-                          />
-                          <select
-                            style={styles.input}
-                            value={editPriority}
-                            onChange={(e) => setEditPriority(e.target.value)}
-                          >
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                          </select>
-                          <div
-                            style={{
-                              ...styles.row,
-                              ...(isMobile ? styles.stackColumn : {}),
-                            }}
-                          >
-                            <button
-                              style={{
-                                ...styles.button,
-                                ...(isMobile ? styles.fullWidthButton : {}),
+                  tasks.map((task) => {
+                    const isExpanded = expandedTaskId === task.id
+                    const isEditing = editingTaskId === task.id
+
+                    return (
+                      <div key={task.id} style={styles.taskCompactCard}>
+                        <div
+                          style={styles.taskCompactHeader}
+                          onClick={() => toggleExpanded(task.id)}
+                        >
+                          <div style={styles.taskLeft}>
+                            <input
+                              type="checkbox"
+                              checked={task.is_complete}
+                              onChange={(e) => {
+                                e.stopPropagation()
+                                toggleTask(task)
                               }}
-                              onClick={() => saveEdit(task.id)}
-                            >
-                              Save
-                            </button>
-                            <button
-                              style={{
-                                ...styles.secondaryButton,
-                                ...(isMobile ? styles.fullWidthButton : {}),
-                              }}
-                              onClick={cancelEdit}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div
-                            style={{
-                              ...styles.taskTop,
-                              ...(isMobile ? styles.taskTopMobile : {}),
-                            }}
-                          >
-                            <label style={styles.checkboxRow}>
-                              <input
-                                type="checkbox"
-                                checked={task.is_complete}
-                                onChange={() => toggleTask(task)}
-                              />
-                              <span
+                              style={styles.checkbox}
+                            />
+                            <div style={styles.taskTextWrap}>
+                              <div
                                 style={{
-                                  ...styles.taskTitle,
+                                  ...styles.taskCompactTitle,
                                   textDecoration: task.is_complete ? 'line-through' : 'none',
-                                  opacity: task.is_complete ? 0.65 : 1,
+                                  opacity: task.is_complete ? 0.6 : 1,
                                 }}
                               >
                                 {task.title}
-                              </span>
-                            </label>
+                              </div>
 
-                            <div
-                              style={{
-                                ...styles.row,
-                                ...(isMobile ? styles.actionsMobile : {}),
-                              }}
-                            >
-                              <button
-                                style={{
-                                  ...styles.secondaryButton,
-                                  ...(isMobile ? styles.actionButtonMobile : {}),
-                                }}
-                                onClick={() => startEdit(task)}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                style={{
-                                  ...styles.dangerButton,
-                                  ...(isMobile ? styles.actionButtonMobile : {}),
-                                }}
-                                onClick={() => deleteTask(task.id)}
-                              >
-                                Delete
-                              </button>
+                              <div style={styles.taskCompactMeta}>
+                                <span style={styles.inlineMeta}>
+                                  {task.due_date ? `Due ${task.due_date}` : 'No due date'}
+                                </span>
+                                <span style={styles.inlineMetaDot}>•</span>
+                                <span style={styles.inlineMeta}>
+                                  {formatReminder(task.reminder_minutes)}
+                                </span>
+                              </div>
                             </div>
                           </div>
 
-                          <div
-                            style={{
-                              ...styles.metaRow,
-                              ...(isMobile ? styles.metaRowMobile : {}),
-                            }}
-                          >
-                            <span style={styles.metaPill}>
-                              Priority: {task.priority || 'medium'}
-                            </span>
-                            <span style={styles.metaPill}>
-                              Due: {task.due_date || '—'}
-                            </span>
+                          <div style={styles.expandHint}>{isExpanded ? 'Hide' : 'Open'}</div>
+                        </div>
+
+                        {isExpanded ? (
+                          <div style={styles.taskExpandedArea}>
+                            {isEditing ? (
+                              <div style={styles.editBlock}>
+                                <input
+                                  style={styles.input}
+                                  value={editTitle}
+                                  onChange={(e) => setEditTitle(e.target.value)}
+                                />
+
+                                <input
+                                  style={styles.input}
+                                  type="date"
+                                  value={editDueDate}
+                                  onChange={(e) => setEditDueDate(e.target.value)}
+                                />
+
+                                <select
+                                  style={styles.input}
+                                  value={editReminder}
+                                  onChange={(e) => setEditReminder(e.target.value)}
+                                >
+                                  <option value="0">At time</option>
+                                  <option value="5">5 min before</option>
+                                  <option value="10">10 min before</option>
+                                  <option value="15">15 min before</option>
+                                  <option value="30">30 min before</option>
+                                  <option value="60">1 hour before</option>
+                                  <option value="120">2 hours before</option>
+                                  <option value="1440">1 day before</option>
+                                  <option value="2880">2 days before</option>
+                                  <option value="10080">1 week before</option>
+                                </select>
+
+                                <select
+                                  style={styles.input}
+                                  value={editPriority}
+                                  onChange={(e) => setEditPriority(e.target.value)}
+                                >
+                                  <option value="low">Low</option>
+                                  <option value="medium">Medium</option>
+                                  <option value="high">High</option>
+                                </select>
+
+                                <div
+                                  style={{
+                                    ...styles.row,
+                                    ...(isMobile ? styles.stackColumn : {}),
+                                  }}
+                                >
+                                  <button
+                                    style={{
+                                      ...styles.button,
+                                      ...(isMobile ? styles.fullWidthButton : {}),
+                                    }}
+                                    onClick={() => saveEdit(task.id)}
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    style={{
+                                      ...styles.secondaryButton,
+                                      ...(isMobile ? styles.fullWidthButton : {}),
+                                    }}
+                                    onClick={cancelEdit}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div style={styles.compactBadges}>
+                                  <span style={styles.metaPill}>
+                                    Priority: {task.priority || 'medium'}
+                                  </span>
+                                  <span style={styles.metaPill}>
+                                    Reminder: {formatReminder(task.reminder_minutes)}
+                                  </span>
+                                </div>
+
+                                <div
+                                  style={{
+                                    ...styles.row,
+                                    ...(isMobile ? styles.stackColumn : {}),
+                                    marginTop: 12,
+                                  }}
+                                >
+                                  <button
+                                    style={{
+                                      ...styles.secondaryButton,
+                                      ...(isMobile ? styles.fullWidthButton : {}),
+                                    }}
+                                    onClick={() => startEdit(task)}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    style={{
+                                      ...styles.dangerButton,
+                                      ...(isMobile ? styles.fullWidthButton : {}),
+                                    }}
+                                    onClick={() => deleteTask(task.id)}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </div>
-                        </>
-                      )}
-                    </div>
-                  ))
+                        ) : null}
+                      </div>
+                    )
+                  })
                 )}
               </div>
             </div>
@@ -718,12 +813,7 @@ export default function DashboardPage() {
               <h2 style={styles.sectionTitle}>Members / Invite</h2>
 
               {isOwner ? (
-                <div
-                  style={{
-                    ...styles.row,
-                    ...(isMobile ? styles.stackColumn : {}),
-                  }}
-                >
+                <div style={{ ...styles.row, ...(isMobile ? styles.stackColumn : {}) }}>
                   <input
                     style={{
                       ...styles.input,
@@ -922,63 +1012,88 @@ const styles: Record<string, React.CSSProperties> = {
     border: '2px solid #2563eb',
     background: '#eff6ff',
   },
-  taskComposer: {
-    display: 'flex',
+  listName: {
+    fontWeight: 700,
+    fontSize: 16,
+    color: '#111827',
+  },
+  taskComposerCompact: {
+    display: 'grid',
+    gridTemplateColumns: '2fr 1fr 1fr 1fr auto',
     gap: 8,
-    flexWrap: 'wrap',
+    alignItems: 'center',
   },
-  taskComposerMobile: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
+  taskComposerCompactMobile: {
+    gridTemplateColumns: '1fr',
   },
-  taskCard: {
+  taskCompactCard: {
     border: '1px solid #d1d5db',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 12,
+    borderRadius: 14,
+    padding: 12,
     background: '#ffffff',
+    marginBottom: 10,
   },
-  taskTop: {
+  taskCompactHeader: {
     display: 'flex',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
-    flexWrap: 'wrap',
+    cursor: 'pointer',
   },
-  taskTopMobile: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
-  },
-  checkboxRow: {
+  taskLeft: {
     display: 'flex',
     alignItems: 'flex-start',
-    gap: 10,
+    gap: 12,
+    flex: 1,
+    minWidth: 0,
+  },
+  checkbox: {
+    marginTop: 4,
+    width: 20,
+    height: 20,
+    flexShrink: 0,
+  },
+  taskTextWrap: {
+    minWidth: 0,
     flex: 1,
   },
-  taskTitle: {
-    fontSize: 16,
+  taskCompactTitle: {
+    fontSize: 18,
     fontWeight: 700,
     color: '#111827',
+    lineHeight: 1.3,
     wordBreak: 'break-word',
   },
-  actionsMobile: {
-    width: '100%',
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: 8,
+  taskCompactMeta: {
+    marginTop: 6,
+    display: 'flex',
+    gap: 6,
+    flexWrap: 'wrap',
+    color: '#6b7280',
+    fontSize: 14,
   },
-  actionButtonMobile: {
-    width: '100%',
+  inlineMeta: {
+    color: '#6b7280',
   },
-  metaRow: {
-    marginTop: 10,
+  inlineMetaDot: {
+    color: '#9ca3af',
+  },
+  expandHint: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: '#2563eb',
+    flexShrink: 0,
+    paddingTop: 4,
+  },
+  taskExpandedArea: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTop: '1px solid #e5e7eb',
+  },
+  compactBadges: {
     display: 'flex',
     gap: 8,
     flexWrap: 'wrap',
-  },
-  metaRowMobile: {
-    flexDirection: 'column',
-    alignItems: 'flex-start',
   },
   metaPill: {
     fontSize: 12,
