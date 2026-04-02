@@ -29,6 +29,7 @@ type Membership = {
 type MemberProfile = {
   id: string;
   email: string | null;
+  full_name?: string | null;
 };
 
 export default function DashboardPage() {
@@ -179,7 +180,7 @@ export default function DashboardPage() {
 
     const { data: profileRows, error: profileError } = await supabase
       .from("profiles")
-      .select("id, email")
+      .select("id, email, full_name")
       .in("id", userIds);
 
     if (profileError) {
@@ -247,6 +248,7 @@ export default function DashboardPage() {
   async function addTask() {
     const title = newTask.trim();
     if (!title || !userId || !selectedListId) return;
+
     if (!canEditCurrentList()) {
       alert("You do not have permission to add tasks to this list.");
       return;
@@ -332,7 +334,7 @@ export default function DashboardPage() {
 
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
-      .select("id, email")
+      .select("id, email, full_name")
       .eq("email", normalizedEmail)
       .maybeSingle();
 
@@ -348,6 +350,12 @@ export default function DashboardPage() {
       return;
     }
 
+    if (profile.id === userId) {
+      alert("You are already the owner of this list.");
+      setInviting(false);
+      return;
+    }
+
     const { error: insertError } = await supabase.from("list_members").insert([
       {
         list_id: selectedListId,
@@ -357,11 +365,14 @@ export default function DashboardPage() {
     ]);
 
     if (insertError) {
-      if (insertError.message.toLowerCase().includes("duplicate")) {
+      const msg = insertError.message.toLowerCase();
+
+      if (msg.includes("duplicate") || msg.includes("already exists")) {
         alert("That user is already in this list.");
       } else {
         alert(insertError.message);
       }
+
       setInviting(false);
       return;
     }
@@ -519,7 +530,7 @@ export default function DashboardPage() {
                   {members.length > 0 ? (
                     <span className="ml-2">
                       {members
-                        .map((m) => m.email || m.id)
+                        .map((m) => m.full_name || m.email || m.id)
                         .sort()
                         .join(", ")}
                     </span>
