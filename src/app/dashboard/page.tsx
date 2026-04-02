@@ -30,10 +30,7 @@ export default function Home() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo:
-          typeof window !== "undefined"
-            ? `${window.location.origin}/dashboard`
-            : undefined,
+        redirectTo: `${window.location.origin}/dashboard`,
       },
     });
 
@@ -61,7 +58,7 @@ export default function Home() {
         <button
           onClick={signIn}
           disabled={loading}
-          className="mt-8 w-full rounded-2xl bg-white px-4 py-3 font-medium text-black transition hover:bg-zinc-200 disabled:opacity-60"
+          className="mt-8 w-full rounded-2xl bg-white px-4 py-3 font-medium text-black hover:bg-zinc-200"
         >
           {loading ? "Please wait..." : "Continue with Google"}
         </button>

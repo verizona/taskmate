@@ -1,31 +1,68 @@
-'use client'
+"use client";
 
-import { supabase } from '@/lib/supabase'
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 export default function Home() {
-  const signIn = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
+  const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    checkSession();
+  }, []);
+
+  async function checkSession() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (session) {
+      window.location.href = "/dashboard";
+      return;
+    }
+
+    setCheckingSession(false);
+  }
+
+  async function signIn() {
+    setLoading(true);
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
       options: {
-        redirectTo: 'http://localhost:3000/dashboard',
+        redirectTo: `${window.location.origin}/dashboard`,
       },
-    })
+    });
+
+    setLoading(false);
+
+    if (error) {
+      alert(error.message);
+    }
+  }
+
+  if (checkingSession) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-black text-white">
+        <div className="text-zinc-400 text-lg">Loading TaskMate...</div>
+      </main>
+    );
   }
 
   return (
-    <div className="flex items-center justify-center h-screen bg-gray-50">
-      <div className="bg-white p-8 rounded-xl shadow-md text-center">
-        <h1 className="text-2xl font-bold mb-4">TaskMate</h1>
-        <p className="mb-6 text-gray-600">
-          Shared tasks. Simple teamwork.
-        </p>
+    <main className="min-h-screen flex items-center justify-center bg-black px-6 text-white">
+      <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-zinc-950/90 p-8 shadow-2xl shadow-black/40">
+        <h1 className="text-4xl font-semibold tracking-tight">TaskMate</h1>
+        <p className="mt-3 text-zinc-400">Shared tasks. Simple teamwork.</p>
+
         <button
           onClick={signIn}
-          className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600"
+          disabled={loading}
+          className="mt-8 w-full rounded-2xl bg-white px-4 py-3 font-medium text-black hover:bg-zinc-200"
         >
-          Continue with Google
+          {loading ? "Please wait..." : "Continue with Google"}
         </button>
       </div>
-    </div>
-  )
+    </main>
+  );
 }
