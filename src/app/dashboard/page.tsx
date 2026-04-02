@@ -114,6 +114,9 @@ export default function DashboardPage() {
   const [newListName, setNewListName] = useState('')
   const [inviteEmail, setInviteEmail] = useState('')
 
+  const [editingListId, setEditingListId] = useState<string | null>(null)
+  const [editListName, setEditListName] = useState('')
+
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [newTaskNotes, setNewTaskNotes] = useState('')
   const [newTaskDateEnabled, setNewTaskDateEnabled] = useState(true)
@@ -350,6 +353,42 @@ export default function DashboardPage() {
       setMessage('List created')
     } catch (e: any) {
       setError(e.message || 'Failed to create list')
+    }
+  }
+
+  function startEditList(list: ListRow) {
+    setEditingListId(list.id)
+    setEditListName(list.name)
+  }
+
+  function cancelEditList() {
+    setEditingListId(null)
+    setEditListName('')
+  }
+
+  async function saveEditList() {
+    try {
+      if (!editingListId) return
+      if (!editListName.trim()) {
+        setError('List name is required.')
+        return
+      }
+
+      setError('')
+      setMessage('')
+
+      const { error } = await supabase
+        .from('lists')
+        .update({ name: editListName.trim() })
+        .eq('id', editingListId)
+
+      if (error) throw error
+
+      await loadLists()
+      cancelEditList()
+      setMessage('List updated')
+    } catch (e: any) {
+      setError(e.message || 'Failed to update list')
     }
   }
 
@@ -622,6 +661,7 @@ export default function DashboardPage() {
 
       setExpandedTaskId(null)
       setEditingTaskId(null)
+      cancelEditList()
       await loadLists()
       await loadAllTasks()
       setScreen('home')
@@ -651,6 +691,7 @@ export default function DashboardPage() {
     setScreen('home')
     setExpandedTaskId(null)
     setEditingTaskId(null)
+    cancelEditList()
   }
 
   const selectedList = useMemo(
@@ -839,21 +880,75 @@ export default function DashboardPage() {
             {screen === 'list' && selectedList ? (
               <div style={styles.detailActionRow}>
                 {isOwner ? (
-                  <button
-                    style={{
-                      ...styles.deleteListButton,
-                      ...(deletingList ? styles.disabledButton : {}),
-                    }}
-                    disabled={deletingList}
-                    onClick={deleteCurrentList}
-                  >
-                    {deletingList ? 'Deleting...' : 'Delete List'}
-                  </button>
+                  <>
+                    <button
+                      style={styles.smallDarkButton}
+                      onClick={() => startEditList(selectedList)}
+                    >
+                      Edit List Name
+                    </button>
+                    <button
+                      style={{
+                        ...styles.deleteListButton,
+                        ...(deletingList ? styles.disabledButton : {}),
+                      }}
+                      disabled={deletingList}
+                      onClick={deleteCurrentList}
+                    >
+                      {deletingList ? 'Deleting...' : 'Delete List'}
+                    </button>
+                  </>
                 ) : (
                   <button style={styles.secondaryActionButton} onClick={leaveCurrentList}>
                     Leave List
                   </button>
                 )}
+              </div>
+            ) : null}
+
+            {screen === 'list' && selectedList ? (
+              <div style={styles.membersPanelDark}>
+                <h2 style={styles.membersTitle}>List Details</h2>
+
+                <div style={styles.detailBoxDark}>
+                  <div style={styles.detailLabelDark}>List name</div>
+
+                  {editingListId === selectedList.id ? (
+                    <div style={styles.inlineEditWrap}>
+                      <input
+                        style={styles.inputDark}
+                        value={editListName}
+                        onChange={(e) => setEditListName(e.target.value)}
+                        placeholder="List name"
+                      />
+                      <div
+                        style={{
+                          ...styles.editButtonRow,
+                          ...(isMobile ? styles.editButtonRowMobile : {}),
+                          marginTop: 10,
+                        }}
+                      >
+                        <button style={styles.saveButton} onClick={saveEditList}>
+                          Save
+                        </button>
+                        <button style={styles.cancelButton} onClick={cancelEditList}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={styles.inlineDetailRow}>
+                      <div style={styles.detailValueDark}>{selectedList.name}</div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={styles.detailBoxDark}>
+                  <div style={styles.detailLabelDark}>Your role</div>
+                  <div style={styles.detailValueDark}>
+                    {currentUserMembership?.role || (isOwner ? 'owner' : 'member')}
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -937,36 +1032,87 @@ export default function DashboardPage() {
                                     placeholder="Notes"
                                   />
 
-                                  <div style={styles.toggleRow}>
-                                    <span>Date</span>
+                                  <div style={styles.appleRow}>
+                                    <div style={styles.appleRowLeft}>
+                                      <div style={styles.appleIcon}>🗓️</div>
+                                      <div style={styles.appleLabel}>Date</div>
+                                    </div>
+
                                     <label style={styles.switch}>
                                       <input
                                         type="checkbox"
                                         checked={editDateEnabled}
                                         onChange={(e) => setEditDateEnabled(e.target.checked)}
+                                        style={{ display: 'none' }}
                                       />
-                                      <span style={styles.slider} />
+                                      <span
+                                        style={{
+                                          ...styles.slider,
+                                          background: editDateEnabled ? '#34c759' : '#6b7280',
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            position: 'absolute',
+                                            top: 3,
+                                            left: editDateEnabled ? 27 : 3,
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: '50%',
+                                            background: '#ffffff',
+                                            transition: 'left 0.18s ease',
+                                            boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                                          }}
+                                        />
+                                      </span>
                                     </label>
                                   </div>
 
                                   {editDateEnabled ? (
-                                    <input
-                                      style={styles.inputDark}
-                                      type="date"
-                                      value={editDueDate}
-                                      onChange={(e) => setEditDueDate(e.target.value)}
-                                    />
+                                    <div style={styles.dateInputWrap}>
+                                      <input
+                                        style={styles.inputDark}
+                                        type="date"
+                                        value={editDueDate}
+                                        onChange={(e) => setEditDueDate(e.target.value)}
+                                      />
+                                      <span style={styles.dateIcon}>🗓️</span>
+                                    </div>
                                   ) : null}
 
-                                  <div style={styles.toggleRow}>
-                                    <span>Time</span>
+                                  <div style={styles.appleRow}>
+                                    <div style={styles.appleRowLeft}>
+                                      <div style={styles.appleIcon}>🕒</div>
+                                      <div style={styles.appleLabel}>Time</div>
+                                    </div>
+
                                     <label style={styles.switch}>
                                       <input
                                         type="checkbox"
                                         checked={editTimeEnabled}
                                         onChange={(e) => setEditTimeEnabled(e.target.checked)}
+                                        style={{ display: 'none' }}
                                       />
-                                      <span style={styles.slider} />
+                                      <span
+                                        style={{
+                                          ...styles.slider,
+                                          background: editTimeEnabled ? '#34c759' : '#6b7280',
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            position: 'absolute',
+                                            top: 3,
+                                            left: editTimeEnabled ? 27 : 3,
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: '50%',
+                                            background: '#ffffff',
+                                            transition: 'left 0.18s ease',
+                                            boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                                          }}
+                                        />
+                                      </span>
                                     </label>
                                   </div>
 
@@ -981,7 +1127,7 @@ export default function DashboardPage() {
 
                                   {editDateEnabled ? (
                                     <select
-                                      style={styles.inputDark}
+                                      style={styles.selectDark}
                                       value={editReminder}
                                       onChange={(e) => setEditReminder(e.target.value)}
                                     >
@@ -999,7 +1145,7 @@ export default function DashboardPage() {
                                   ) : null}
 
                                   <select
-                                    style={styles.inputDark}
+                                    style={styles.selectDark}
                                     value={editPriority}
                                     onChange={(e) => setEditPriority(e.target.value)}
                                   >
@@ -1109,53 +1255,106 @@ export default function DashboardPage() {
               </div>
 
               <div style={styles.modalSection}>
-                <input
-                  style={styles.inputDark}
-                  placeholder="Title"
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                />
-                <textarea
-                  style={styles.textareaDark}
-                  placeholder="Notes"
-                  value={newTaskNotes}
-                  onChange={(e) => setNewTaskNotes(e.target.value)}
-                />
+                <div style={styles.modalFieldStack}>
+                  <input
+                    style={styles.inputDark}
+                    placeholder="Title"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                  />
+                  <textarea
+                    style={styles.textareaDark}
+                    placeholder="Notes"
+                    value={newTaskNotes}
+                    onChange={(e) => setNewTaskNotes(e.target.value)}
+                  />
+                </div>
               </div>
 
               <div style={styles.modalSection}>
                 <div style={styles.sectionHeading}>Date & Time</div>
 
-                <div style={styles.toggleRow}>
-                  <span>Date</span>
+                <div style={styles.appleRow}>
+                  <div style={styles.appleRowLeft}>
+                    <div style={styles.appleIcon}>🗓️</div>
+                    <div style={styles.appleLabel}>Date</div>
+                  </div>
+
                   <label style={styles.switch}>
                     <input
                       type="checkbox"
                       checked={newTaskDateEnabled}
                       onChange={(e) => setNewTaskDateEnabled(e.target.checked)}
+                      style={{ display: 'none' }}
                     />
-                    <span style={styles.slider} />
+                    <span
+                      style={{
+                        ...styles.slider,
+                        background: newTaskDateEnabled ? '#34c759' : '#6b7280',
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: 3,
+                          left: newTaskDateEnabled ? 27 : 3,
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          background: '#ffffff',
+                          transition: 'left 0.18s ease',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                        }}
+                      />
+                    </span>
                   </label>
                 </div>
 
                 {newTaskDateEnabled ? (
-                  <input
-                    style={styles.inputDark}
-                    type="date"
-                    value={newTaskDueDate}
-                    onChange={(e) => setNewTaskDueDate(e.target.value)}
-                  />
+                  <div style={styles.dateInputWrap}>
+                    <input
+                      style={styles.inputDark}
+                      type="date"
+                      value={newTaskDueDate}
+                      onChange={(e) => setNewTaskDueDate(e.target.value)}
+                    />
+                    <span style={styles.dateIcon}>🗓️</span>
+                  </div>
                 ) : null}
 
-                <div style={styles.toggleRow}>
-                  <span>Time</span>
+                <div style={styles.appleRow}>
+                  <div style={styles.appleRowLeft}>
+                    <div style={styles.appleIcon}>🕒</div>
+                    <div style={styles.appleLabel}>Time</div>
+                  </div>
+
                   <label style={styles.switch}>
                     <input
                       type="checkbox"
                       checked={newTaskTimeEnabled}
                       onChange={(e) => setNewTaskTimeEnabled(e.target.checked)}
+                      style={{ display: 'none' }}
                     />
-                    <span style={styles.slider} />
+                    <span
+                      style={{
+                        ...styles.slider,
+                        background: newTaskTimeEnabled ? '#34c759' : '#6b7280',
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: 3,
+                          left: newTaskTimeEnabled ? 27 : 3,
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          background: '#ffffff',
+                          transition: 'left 0.18s ease',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                        }}
+                      />
+                    </span>
                   </label>
                 </div>
 
@@ -1173,7 +1372,7 @@ export default function DashboardPage() {
                 <div style={styles.sectionHeading}>More Options</div>
 
                 <select
-                  style={styles.inputDark}
+                  style={styles.selectDark}
                   value={newTaskListId}
                   onChange={(e) => setNewTaskListId(e.target.value)}
                 >
@@ -1186,7 +1385,7 @@ export default function DashboardPage() {
 
                 {newTaskDateEnabled ? (
                   <select
-                    style={styles.inputDark}
+                    style={styles.selectDark}
                     value={newTaskReminder}
                     onChange={(e) => setNewTaskReminder(e.target.value)}
                   >
@@ -1204,7 +1403,7 @@ export default function DashboardPage() {
                 ) : null}
 
                 <select
-                  style={styles.inputDark}
+                  style={styles.selectDark}
                   value={newTaskPriority}
                   onChange={(e) => setNewTaskPriority(e.target.value)}
                 >
@@ -1476,25 +1675,6 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: 'wrap',
   },
 
-  smallDarkButton: {
-    padding: '10px 14px',
-    borderRadius: 12,
-    border: '1px solid #3b4250',
-    background: '#1f2430',
-    color: '#fff',
-    cursor: 'pointer',
-    fontWeight: 600,
-  },
-  smallDeleteButton: {
-    padding: '10px 14px',
-    borderRadius: 12,
-    border: 'none',
-    background: '#dc2626',
-    color: '#fff',
-    cursor: 'pointer',
-    fontWeight: 600,
-  },
-
   editGrid: {
     display: 'grid',
     gap: 10,
@@ -1553,7 +1733,36 @@ const styles: Record<string, React.CSSProperties> = {
   detailActionRow: {
     display: 'flex',
     justifyContent: 'flex-end',
+    gap: 10,
+    flexWrap: 'wrap',
     marginBottom: 12,
+  },
+  detailBoxDark: {
+    border: '1px solid #262b36',
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 10,
+    background: '#181b22',
+  },
+  detailLabelDark: {
+    fontSize: 12,
+    color: '#8b93a1',
+    marginBottom: 6,
+  },
+  detailValueDark: {
+    fontSize: 18,
+    fontWeight: 700,
+    color: '#ffffff',
+  },
+  inlineDetailRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  inlineEditWrap: {
+    marginTop: 6,
   },
 
   input: {
@@ -1568,34 +1777,47 @@ const styles: Record<string, React.CSSProperties> = {
   },
   inputDark: {
     width: '100%',
-    padding: '14px 16px',
-    borderRadius: 16,
-    border: '1px solid #313642',
-    background: '#1b1d24',
-    color: '#fff',
-    fontSize: 16,
+    padding: '16px 18px',
+    borderRadius: 18,
+    border: '1px solid #3a4150',
+    background: '#1d212b',
+    color: '#ffffff',
+    fontSize: 17,
     outline: 'none',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
   },
   textareaDark: {
     width: '100%',
-    minHeight: 92,
-    padding: '14px 16px',
-    borderRadius: 16,
-    border: '1px solid #313642',
-    background: '#1b1d24',
-    color: '#fff',
-    fontSize: 16,
+    minHeight: 120,
+    padding: '16px 18px',
+    borderRadius: 18,
+    border: '1px solid #3a4150',
+    background: '#1d212b',
+    color: '#ffffff',
+    fontSize: 17,
     outline: 'none',
     resize: 'vertical',
     fontFamily: 'Arial, sans-serif',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+  },
+  selectDark: {
+    width: '100%',
+    padding: '16px 18px',
+    borderRadius: 18,
+    border: '1px solid #3a4150',
+    background: '#1d212b',
+    color: '#ffffff',
+    fontSize: 17,
+    outline: 'none',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
   },
 
   ghostButton: {
     padding: '10px 14px',
     borderRadius: 14,
-    border: '1px solid #2e333d',
-    background: '#15171d',
-    color: '#fff',
+    border: '1px solid #343a46',
+    background: '#171a21',
+    color: '#ffffff',
     cursor: 'pointer',
     fontWeight: 600,
     height: 'fit-content',
@@ -1636,6 +1858,24 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontWeight: 700,
   },
+  smallDarkButton: {
+    padding: '10px 14px',
+    borderRadius: 12,
+    border: '1px solid #3b4250',
+    background: '#1f2430',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 600,
+  },
+  smallDeleteButton: {
+    padding: '10px 14px',
+    borderRadius: 12,
+    border: 'none',
+    background: '#dc2626',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 600,
+  },
   disabledButton: {
     opacity: 0.6,
     cursor: 'not-allowed',
@@ -1671,71 +1911,119 @@ const styles: Record<string, React.CSSProperties> = {
   modalCard: {
     width: '100%',
     maxWidth: 560,
-    background: '#0e1015',
-    border: '1px solid #242933',
-    borderRadius: 26,
+    background: '#111318',
+    border: '1px solid #2d3340',
+    borderRadius: 28,
     padding: 18,
+    boxShadow: '0 24px 80px rgba(0,0,0,0.55)',
   },
   modalHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 14,
+    marginBottom: 16,
   },
   modalTitle: {
-    color: '#fff',
-    fontSize: 18,
+    color: '#ffffff',
+    fontSize: 20,
     fontWeight: 700,
   },
   iconCircle: {
-    width: 48,
-    height: 48,
+    width: 56,
+    height: 56,
     borderRadius: '50%',
-    border: '1px solid #353b46',
-    background: '#2a2d36',
-    color: '#fff',
+    border: '1px solid #4b5563',
+    background: 'linear-gradient(180deg, #3a3f4a, #2d313b)',
+    color: '#ffffff',
     cursor: 'pointer',
-    fontSize: 26,
-    lineHeight: '44px',
+    fontSize: 28,
+    lineHeight: '52px',
     textAlign: 'center',
     padding: 0,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
   },
   modalSection: {
-    background: '#15171d',
-    borderRadius: 22,
-    padding: 16,
-    marginTop: 12,
+    background: '#181b22',
+    borderRadius: 24,
+    padding: 18,
+    marginTop: 14,
+    display: 'grid',
+    gap: 14,
+    border: '1px solid #262b36',
+  },
+  modalFieldStack: {
     display: 'grid',
     gap: 12,
   },
   sectionHeading: {
-    color: '#bfc4cf',
-    fontSize: 16,
+    color: '#d1d5db',
+    fontSize: 17,
     fontWeight: 700,
     marginBottom: 2,
+  },
+
+  appleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 14,
+    padding: '10px 0',
+    borderBottom: '1px solid #2a2f39',
+  },
+  appleRowLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 14,
+    minWidth: 0,
+  },
+  appleIcon: {
+    width: 28,
+    textAlign: 'center',
+    color: '#a1a1aa',
+    fontSize: 20,
+    flexShrink: 0,
+  },
+  appleLabel: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: 500,
   },
 
   toggleRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    color: '#fff',
-    fontSize: 16,
-    padding: '4px 0',
+    color: '#ffffff',
+    fontSize: 17,
+    padding: '8px 0',
+    borderBottom: '1px solid #2a2f39',
   },
   switch: {
     position: 'relative',
     display: 'inline-block',
-    width: 54,
-    height: 32,
+    width: 58,
+    height: 34,
   },
   slider: {
     position: 'absolute',
-    cursor: 'pointer',
     inset: 0,
-    backgroundColor: '#5b5f69',
+    background: '#6b7280',
     borderRadius: 999,
+    boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)',
+  },
+
+  dateInputWrap: {
+    position: 'relative',
+  },
+  dateIcon: {
+    position: 'absolute',
+    right: 16,
+    top: '50%',
+    transform: 'translateY(-50%)',
+    color: '#9ca3af',
+    fontSize: 18,
+    pointerEvents: 'none',
   },
 
   loadingWrap: {
