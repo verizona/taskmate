@@ -1,624 +1,857 @@
-"use client";
+'use client'
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useEffect, useMemo, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 
-type Task = {
-  id: string;
-  title: string;
-  is_completed: boolean;
-  user_id: string;
-  created_at?: string;
-  due_date?: string | null;
-  priority?: string | null;
-  list_id: string;
-};
+type ListRow = {
+  id: string
+  name: string
+  owner_id: string
+  created_at: string
+}
 
-type List = {
-  id: string;
-  name: string | null;
-  owner_id: string;
-  created_at?: string;
-};
+type TaskRow = {
+  id: string
+  title: string
+  is_complete: boolean
+  user_id: string | null
+  list_id: string | null
+  due_date: string | null
+  priority: string | null
+  created_at?: string
+}
 
-type Membership = {
-  list_id: string;
-  role: "owner" | "editor" | "viewer";
-};
-
-type MemberProfile = {
-  id: string;
-  email: string | null;
-  full_name?: string | null;
-};
+type MemberRow = {
+  id: string
+  list_id: string
+  user_id: string
+  role: 'owner' | 'member'
+  created_at: string
+  profiles?: {
+    email: string | null
+  } | null
+}
 
 export default function DashboardPage() {
-  const [loading, setLoading] = useState(true);
-  const [email, setEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null)
+  const [userEmail, setUserEmail] = useState<string>('')
+  const [loading, setLoading] = useState(true)
 
-  const [lists, setLists] = useState<List[]>([]);
-  const [selectedListId, setSelectedListId] = useState<string>("");
+  const [lists, setLists] = useState<ListRow[]>([])
+  const [selectedListId, setSelectedListId] = useState<string>('')
+  const [tasks, setTasks] = useState<TaskRow[]>([])
+  const [members, setMembers] = useState<MemberRow[]>([])
 
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [newTask, setNewTask] = useState("");
-  const [newListName, setNewListName] = useState("");
+  const [newListName, setNewListName] = useState('')
+  const [newTaskTitle, setNewTaskTitle] = useState('')
+  const [newTaskDueDate, setNewTaskDueDate] = useState('')
+  const [newTaskPriority, setNewTaskPriority] = useState('medium')
 
-  const [savingTask, setSavingTask] = useState(false);
-  const [savingList, setSavingList] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('')
 
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [members, setMembers] = useState<MemberProfile[]>([]);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editDueDate, setEditDueDate] = useState('')
+  const [editPriority, setEditPriority] = useState('medium')
 
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<"editor" | "viewer">("editor");
-  const [inviting, setInviting] = useState(false);
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    loadDashboard();
-  }, []);
+    init()
+  }, [])
 
   useEffect(() => {
     if (selectedListId) {
-      loadTasksForList(selectedListId);
-      loadMembersForList(selectedListId);
+      loadTasks(selectedListId)
+      loadMembers(selectedListId)
     } else {
-      setTasks([]);
-      setMembers([]);
+      setTasks([])
+      setMembers([])
     }
-  }, [selectedListId]);
+  }, [selectedListId])
 
-  async function loadDashboard() {
-    setLoading(true);
+  async function init() {
+    try {
+      setLoading(true)
+      setError('')
+      setMessage('')
 
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession()
 
-    if (sessionError || !session) {
-      window.location.href = "/";
-      return;
+      if (sessionError) throw sessionError
+      if (!session?.user) {
+        window.location.href = '/'
+        return
+      }
+
+      const uid = session.user.id
+      const email = session.user.email ?? ''
+
+      setUserId(uid)
+      setUserEmail(email)
+
+      await ensureProfile(uid, email)
+      await ensurePersonalList(uid)
+      await loadLists(uid)
+    } catch (e: any) {
+      setError(e.message || 'Failed to load dashboard')
+    } finally {
+      setLoading(false)
     }
-
-    const user = session.user;
-    setEmail(user.email ?? null);
-    setUserId(user.id);
-
-    const { data: membershipData, error: membershipError } = await supabase
-      .from("list_members")
-      .select("list_id, role")
-      .eq("user_id", user.id);
-
-    if (membershipError) {
-      alert(membershipError.message);
-      setLoading(false);
-      return;
-    }
-
-    const memberRows = (membershipData ?? []) as Membership[];
-    setMemberships(memberRows);
-
-    const listIds = memberRows.map((m) => m.list_id);
-
-    if (listIds.length === 0) {
-      setLists([]);
-      setSelectedListId("");
-      setTasks([]);
-      setMembers([]);
-      setLoading(false);
-      return;
-    }
-
-    const { data: listData, error: listError } = await supabase
-      .from("lists")
-      .select("id, name, owner_id, created_at")
-      .in("id", listIds)
-      .order("created_at", { ascending: true });
-
-    if (listError) {
-      alert(listError.message);
-      setLoading(false);
-      return;
-    }
-
-    const loadedLists = (listData ?? []) as List[];
-    setLists(loadedLists);
-
-    const stillValidSelected = loadedLists.some((l) => l.id === selectedListId);
-    const nextSelectedListId = stillValidSelected
-      ? selectedListId
-      : loadedLists[0]?.id ?? "";
-
-    setSelectedListId(nextSelectedListId);
-
-    if (nextSelectedListId) {
-      await loadTasksForList(nextSelectedListId);
-      await loadMembersForList(nextSelectedListId);
-    } else {
-      setTasks([]);
-      setMembers([]);
-    }
-
-    setLoading(false);
   }
 
-  async function loadTasksForList(listId: string) {
+  async function ensureProfile(uid: string, email: string) {
+    const { error } = await supabase
+      .from('profiles')
+      .upsert({ id: uid, email }, { onConflict: 'id' })
+
+    if (error) throw error
+  }
+
+  async function ensurePersonalList(uid: string) {
+    const { data: existingMemberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select('id, list_id')
+      .eq('user_id', uid)
+      .limit(1)
+
+    if (membershipError) throw membershipError
+
+    if (existingMemberships && existingMemberships.length > 0) return
+
+    const { data: newList, error: listError } = await supabase
+      .from('lists')
+      .insert({
+        name: 'My Tasks',
+        owner_id: uid,
+      })
+      .select()
+      .single()
+
+    if (listError) throw listError
+
+    const { error: memberError } = await supabase
+      .from('list_members')
+      .insert({
+        list_id: newList.id,
+        user_id: uid,
+        role: 'owner',
+      })
+
+    if (memberError) throw memberError
+
+    const { error: backfillError } = await supabase
+      .from('tasks')
+      .update({ list_id: newList.id })
+      .eq('user_id', uid)
+      .is('list_id', null)
+
+    if (backfillError) throw backfillError
+  }
+
+  async function loadLists(uid?: string) {
+    const actualUserId = uid || userId
+    if (!actualUserId) return
+
+    const { data: memberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select('list_id')
+      .eq('user_id', actualUserId)
+
+    if (membershipError) throw membershipError
+
+    const ids = (memberships || []).map((m) => m.list_id)
+    if (ids.length === 0) {
+      setLists([])
+      setSelectedListId('')
+      return
+    }
+
     const { data, error } = await supabase
-      .from("tasks")
-      .select(
-        "id, title, is_completed, user_id, created_at, due_date, priority, list_id"
-      )
-      .eq("list_id", listId)
-      .order("created_at", { ascending: false });
+      .from('lists')
+      .select('*')
+      .in('id', ids)
+      .order('created_at', { ascending: true })
+
+    if (error) throw error
+
+    setLists(data || [])
+
+    setSelectedListId((current) => {
+      if (current && (data || []).some((l) => l.id === current)) return current
+      return data?.[0]?.id || ''
+    })
+  }
+
+  async function loadTasks(listId: string) {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('list_id', listId)
+      .order('is_complete', { ascending: true })
+      .order('created_at', { ascending: false })
 
     if (error) {
-      alert(error.message);
-      return;
+      setError(error.message)
+      return
     }
 
-    setTasks((data ?? []) as Task[]);
+    setTasks(data || [])
   }
 
-  async function loadMembersForList(listId: string) {
-    const { data: memberRows, error: memberError } = await supabase
-      .from("list_members")
-      .select("user_id")
-      .eq("list_id", listId);
+  async function loadMembers(listId: string) {
+    const { data, error } = await supabase
+      .from('list_members')
+      .select(`
+        *,
+        profiles (
+          email
+        )
+      `)
+      .eq('list_id', listId)
+      .order('created_at', { ascending: true })
 
-    if (memberError) {
-      alert(memberError.message);
-      return;
+    if (error) {
+      setError(error.message)
+      return
     }
 
-    const userIds = (memberRows ?? []).map((m: any) => m.user_id);
-
-    if (userIds.length === 0) {
-      setMembers([]);
-      return;
-    }
-
-    const { data: profileRows, error: profileError } = await supabase
-      .from("profiles")
-      .select("id, email, full_name")
-      .in("id", userIds);
-
-    if (profileError) {
-      alert(profileError.message);
-      return;
-    }
-
-    setMembers((profileRows ?? []) as MemberProfile[]);
-  }
-
-  function currentRole(): "owner" | "editor" | "viewer" | null {
-    const membership = memberships.find((m) => m.list_id === selectedListId);
-    return membership?.role ?? null;
-  }
-
-  function canEditCurrentList() {
-    const role = currentRole();
-    return role === "owner" || role === "editor";
-  }
-
-  function isOwner() {
-    return currentRole() === "owner";
+    setMembers((data as MemberRow[]) || [])
   }
 
   async function createList() {
-    const name = newListName.trim();
-    if (!name || !userId) return;
+    try {
+      if (!userId) return
+      if (!newListName.trim()) return
 
-    setSavingList(true);
+      setError('')
+      setMessage('')
 
-    const { data: createdList, error: listError } = await supabase
-      .from("lists")
-      .insert([{ name, owner_id: userId }])
-      .select()
-      .single();
+      const { data: list, error: listError } = await supabase
+        .from('lists')
+        .insert({
+          name: newListName.trim(),
+          owner_id: userId,
+        })
+        .select()
+        .single()
 
-    if (listError) {
-      alert(listError.message);
-      setSavingList(false);
-      return;
+      if (listError) throw listError
+
+      const { error: memberError } = await supabase
+        .from('list_members')
+        .insert({
+          list_id: list.id,
+          user_id: userId,
+          role: 'owner',
+        })
+
+      if (memberError) throw memberError
+
+      setNewListName('')
+      await loadLists()
+      setSelectedListId(list.id)
+      setMessage('List created')
+    } catch (e: any) {
+      setError(e.message || 'Failed to create list')
     }
-
-    const newList = createdList as List;
-
-    const { error: memberError } = await supabase.from("list_members").insert([
-      {
-        list_id: newList.id,
-        user_id: userId,
-        role: "owner",
-      },
-    ]);
-
-    if (memberError) {
-      alert(memberError.message);
-      setSavingList(false);
-      return;
-    }
-
-    setNewListName("");
-    await loadDashboard();
-    setSelectedListId(newList.id);
-    setSavingList(false);
   }
 
   async function addTask() {
-    const title = newTask.trim();
-    if (!title || !userId || !selectedListId) return;
+    try {
+      if (!userId) return
+      if (!selectedListId) {
+        setError('Select a list first')
+        return
+      }
+      if (!newTaskTitle.trim()) return
 
-    if (!canEditCurrentList()) {
-      alert("You do not have permission to add tasks to this list.");
-      return;
+      setError('')
+      setMessage('')
+
+      const payload = {
+        title: newTaskTitle.trim(),
+        is_complete: false,
+        user_id: userId,
+        list_id: selectedListId,
+        due_date: newTaskDueDate || null,
+        priority: newTaskPriority || 'medium',
+      }
+
+      const { error } = await supabase.from('tasks').insert(payload)
+      if (error) throw error
+
+      setNewTaskTitle('')
+      setNewTaskDueDate('')
+      setNewTaskPriority('medium')
+      await loadTasks(selectedListId)
+      setMessage('Task added')
+    } catch (e: any) {
+      setError(e.message || 'Failed to add task')
     }
-
-    setSavingTask(true);
-
-    const { data, error } = await supabase
-      .from("tasks")
-      .insert([
-        {
-          title,
-          user_id: userId,
-          is_completed: false,
-          list_id: selectedListId,
-        },
-      ])
-      .select()
-      .single();
-
-    if (error) {
-      alert(error.message);
-    } else if (data) {
-      setTasks((prev) => [data as Task, ...prev]);
-      setNewTask("");
-    }
-
-    setSavingTask(false);
   }
 
-  async function toggleTask(taskId: string, currentValue: boolean) {
-    if (!canEditCurrentList()) {
-      alert("You do not have permission to change tasks in this list.");
-      return;
+  async function toggleTask(task: TaskRow) {
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ is_complete: !task.is_complete })
+        .eq('id', task.id)
+
+      if (error) throw error
+
+      await loadTasks(selectedListId)
+    } catch (e: any) {
+      setError(e.message || 'Failed to update task')
     }
+  }
 
-    const { error } = await supabase
-      .from("tasks")
-      .update({ is_completed: !currentValue })
-      .eq("id", taskId);
+  function startEdit(task: TaskRow) {
+    setEditingTaskId(task.id)
+    setEditTitle(task.title)
+    setEditDueDate(task.due_date || '')
+    setEditPriority(task.priority || 'medium')
+  }
 
-    if (error) {
-      alert(error.message);
-      return;
+  function cancelEdit() {
+    setEditingTaskId(null)
+    setEditTitle('')
+    setEditDueDate('')
+    setEditPriority('medium')
+  }
+
+  async function saveEdit(taskId: string) {
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({
+          title: editTitle.trim(),
+          due_date: editDueDate || null,
+          priority: editPriority || 'medium',
+        })
+        .eq('id', taskId)
+
+      if (error) throw error
+
+      cancelEdit()
+      await loadTasks(selectedListId)
+      setMessage('Task updated')
+    } catch (e: any) {
+      setError(e.message || 'Failed to save task')
     }
-
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === taskId
-          ? { ...task, is_completed: !currentValue }
-          : task
-      )
-    );
   }
 
   async function deleteTask(taskId: string) {
-    if (!canEditCurrentList()) {
-      alert("You do not have permission to delete tasks from this list.");
-      return;
+    try {
+      const { error } = await supabase.from('tasks').delete().eq('id', taskId)
+      if (error) throw error
+
+      await loadTasks(selectedListId)
+      setMessage('Task deleted')
+    } catch (e: any) {
+      setError(e.message || 'Failed to delete task')
     }
-
-    const { error } = await supabase.from("tasks").delete().eq("id", taskId);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    setTasks((prev) => prev.filter((task) => task.id !== taskId));
   }
 
   async function inviteMember() {
-    const normalizedEmail = inviteEmail.trim().toLowerCase();
+    try {
+      if (!selectedListId) return
+      if (!inviteEmail.trim()) return
 
-    if (!normalizedEmail || !selectedListId) return;
+      setError('')
+      setMessage('')
 
-    if (!isOwner()) {
-      alert("Only the list owner can invite members.");
-      return;
-    }
+      const normalized = inviteEmail.trim().toLowerCase()
 
-    setInviting(true);
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id, email')
+        .eq('email', normalized)
+        .single()
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id, email, full_name")
-      .eq("email", normalizedEmail)
-      .maybeSingle();
-
-    if (profileError) {
-      alert(profileError.message);
-      setInviting(false);
-      return;
-    }
-
-    if (!profile) {
-      alert("No user found with that email.");
-      setInviting(false);
-      return;
-    }
-
-    if (profile.id === userId) {
-      alert("You are already the owner of this list.");
-      setInviting(false);
-      return;
-    }
-
-    const { error: insertError } = await supabase.from("list_members").insert([
-      {
-        list_id: selectedListId,
-        user_id: profile.id,
-        role: inviteRole,
-      },
-    ]);
-
-    if (insertError) {
-      const msg = insertError.message.toLowerCase();
-
-      if (msg.includes("duplicate") || msg.includes("already exists")) {
-        alert("That user is already in this list.");
-      } else {
-        alert(insertError.message);
+      if (profileError || !profile) {
+        throw new Error('That user must sign in once before you can invite them.')
       }
 
-      setInviting(false);
-      return;
-    }
+      const { error: insertError } = await supabase
+        .from('list_members')
+        .insert({
+          list_id: selectedListId,
+          user_id: profile.id,
+          role: 'member',
+        })
 
-    setInviteEmail("");
-    setInviteRole("editor");
-    await loadMembersForList(selectedListId);
-    alert("User invited successfully.");
-    setInviting(false);
+      if (insertError) {
+        if (insertError.message.toLowerCase().includes('duplicate')) {
+          throw new Error('That user is already in this list.')
+        }
+        throw insertError
+      }
+
+      setInviteEmail('')
+      await loadMembers(selectedListId)
+      setMessage(`Invited ${normalized}`)
+    } catch (e: any) {
+      setError(e.message || 'Failed to invite member')
+    }
+  }
+
+  async function removeMember(member: MemberRow) {
+    try {
+      const currentList = lists.find((l) => l.id === selectedListId)
+      if (!currentList) return
+
+      if (member.user_id === currentList.owner_id) {
+        setError('You cannot remove the owner.')
+        return
+      }
+
+      const { error } = await supabase
+        .from('list_members')
+        .delete()
+        .eq('id', member.id)
+
+      if (error) throw error
+
+      await loadMembers(selectedListId)
+      setMessage('Member removed')
+    } catch (e: any) {
+      setError(e.message || 'Failed to remove member')
+    }
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
-    window.location.href = "/";
+    await supabase.auth.signOut()
+    window.location.href = '/'
   }
+
+  const selectedList = useMemo(
+    () => lists.find((l) => l.id === selectedListId) || null,
+    [lists, selectedListId]
+  )
+
+  const isOwner = !!selectedList && selectedList.owner_id === userId
 
   if (loading) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-black text-white">
-        <div className="text-zinc-400 text-lg">Loading TaskMate...</div>
+      <main style={styles.page}>
+        <div style={styles.card}>Loading...</div>
       </main>
-    );
+    )
   }
 
-  const selectedList = lists.find((l) => l.id === selectedListId);
-  const role = currentRole();
-  const canEdit = canEditCurrentList();
-
   return (
-    <main className="min-h-screen bg-black px-6 py-10 text-white">
-      <div className="mx-auto max-w-7xl">
-        <div className="flex items-start justify-between gap-4">
+    <main style={styles.page}>
+      <div style={styles.container}>
+        <div style={styles.header}>
           <div>
-            <h1 className="text-5xl font-semibold tracking-tight">TaskMate</h1>
-            <p className="mt-3 text-zinc-400">
-              Signed in as {email ?? "unknown user"}
-            </p>
+            <h1 style={styles.title}>TaskMate</h1>
+            <div style={styles.subtle}>Signed in as {userEmail}</div>
           </div>
-
-          <button
-            onClick={signOut}
-            className="rounded-2xl bg-white px-6 py-4 font-medium text-black hover:bg-zinc-200"
-          >
+          <button style={styles.secondaryButton} onClick={signOut}>
             Sign out
           </button>
         </div>
 
-        <div className="mt-10 grid gap-6 lg:grid-cols-[320px_1fr]">
-          <section className="rounded-[28px] border border-white/10 bg-zinc-950/90 p-6 shadow-2xl shadow-black/40">
-            <h2 className="text-2xl font-semibold">Lists</h2>
+        {message ? <div style={styles.success}>{message}</div> : null}
+        {error ? <div style={styles.error}>{error}</div> : null}
 
-            <div className="mt-5 flex gap-3">
+        <div style={styles.grid}>
+          <section style={styles.sidebar}>
+            <h2 style={styles.sectionTitle}>Your Lists</h2>
+
+            <div style={styles.row}>
               <input
+                style={styles.input}
+                placeholder="New list name"
                 value={newListName}
                 onChange={(e) => setNewListName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") createList();
-                }}
-                placeholder="New list name..."
-                className="flex-1 rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none placeholder:text-zinc-500"
               />
-              <button
-                onClick={createList}
-                disabled={savingList}
-                className="rounded-2xl bg-white px-4 py-3 font-medium text-black hover:bg-zinc-200 disabled:opacity-60"
-              >
-                {savingList ? "..." : "Add"}
+              <button style={styles.button} onClick={createList}>
+                Create
               </button>
             </div>
 
-            <div className="mt-6 space-y-2">
-              {lists.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-white/10 p-4 text-zinc-400">
-                  No lists yet.
-                </div>
-              ) : (
-                lists.map((list) => {
-                  const listMembership = memberships.find(
-                    (m) => m.list_id === list.id
-                  );
-
-                  return (
-                    <button
-                      key={list.id}
-                      onClick={() => setSelectedListId(list.id)}
-                      className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                        selectedListId === list.id
-                          ? "border-white/30 bg-white/10 text-white"
-                          : "border-white/10 bg-black/30 text-zinc-300 hover:bg-white/5"
-                      }`}
-                    >
-                      <div className="font-medium">
-                        {list.name || "Untitled List"}
-                      </div>
-                      <div className="mt-1 text-xs uppercase tracking-wide text-zinc-500">
-                        {listMembership?.role ?? "member"}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
+            <div style={{ marginTop: 12 }}>
+              {lists.map((list) => (
+                <button
+                  key={list.id}
+                  onClick={() => setSelectedListId(list.id)}
+                  style={{
+                    ...styles.listButton,
+                    ...(selectedListId === list.id ? styles.listButtonActive : {}),
+                  }}
+                >
+                  <div style={{ fontWeight: 600 }}>{list.name}</div>
+                  <div style={styles.smallText}>
+                    {list.owner_id === userId ? 'Owner' : 'Shared with you'}
+                  </div>
+                </button>
+              ))}
             </div>
           </section>
 
-          <section className="rounded-[28px] border border-white/10 bg-zinc-950/90 p-6 shadow-2xl shadow-black/40">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-2xl font-semibold">
-                  {selectedList?.name || "My Tasks"}
-                </h2>
-                {role && (
-                  <p className="mt-1 text-sm text-zinc-500">
-                    Your role: {role}
-                  </p>
+          <section style={styles.main}>
+            <div style={styles.panel}>
+              <h2 style={styles.sectionTitle}>
+                {selectedList ? `Tasks · ${selectedList.name}` : 'Tasks'}
+              </h2>
+
+              <div style={styles.taskComposer}>
+                <input
+                  style={{ ...styles.input, flex: 2 }}
+                  placeholder="New task..."
+                  value={newTaskTitle}
+                  onChange={(e) => setNewTaskTitle(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={newTaskDueDate}
+                  onChange={(e) => setNewTaskDueDate(e.target.value)}
+                />
+                <select
+                  style={styles.input}
+                  value={newTaskPriority}
+                  onChange={(e) => setNewTaskPriority(e.target.value)}
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+                <button style={styles.button} onClick={addTask}>
+                  Add
+                </button>
+              </div>
+
+              <div style={{ marginTop: 14 }}>
+                {tasks.length === 0 ? (
+                  <div style={styles.empty}>No tasks yet.</div>
+                ) : (
+                  tasks.map((task) => (
+                    <div key={task.id} style={styles.taskCard}>
+                      {editingTaskId === task.id ? (
+                        <div style={styles.editBlock}>
+                          <input
+                            style={styles.input}
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                          />
+                          <input
+                            style={styles.input}
+                            type="date"
+                            value={editDueDate}
+                            onChange={(e) => setEditDueDate(e.target.value)}
+                          />
+                          <select
+                            style={styles.input}
+                            value={editPriority}
+                            onChange={(e) => setEditPriority(e.target.value)}
+                          >
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                          </select>
+                          <div style={styles.row}>
+                            <button style={styles.button} onClick={() => saveEdit(task.id)}>
+                              Save
+                            </button>
+                            <button style={styles.secondaryButton} onClick={cancelEdit}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={styles.taskTop}>
+                            <label style={styles.checkboxRow}>
+                              <input
+                                type="checkbox"
+                                checked={task.is_complete}
+                                onChange={() => toggleTask(task)}
+                              />
+                              <span
+                                style={{
+                                  ...styles.taskTitle,
+                                  textDecoration: task.is_complete ? 'line-through' : 'none',
+                                  opacity: task.is_complete ? 0.65 : 1,
+                                }}
+                              >
+                                {task.title}
+                              </span>
+                            </label>
+
+                            <div style={styles.row}>
+                              <button
+                                style={styles.secondaryButton}
+                                onClick={() => startEdit(task)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                style={styles.dangerButton}
+                                onClick={() => deleteTask(task.id)}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={styles.metaRow}>
+                            <span style={styles.metaPill}>
+                              Priority: {task.priority || 'medium'}
+                            </span>
+                            <span style={styles.metaPill}>
+                              Due: {task.due_date || '—'}
+                            </span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))
                 )}
               </div>
             </div>
 
-            {isOwner() && selectedListId && (
-              <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-4">
-                <div className="text-sm font-medium text-zinc-300">
-                  Invite by email
-                </div>
+            <div style={styles.panel}>
+              <h2 style={styles.sectionTitle}>Members / Invite</h2>
 
-                <div className="mt-3 flex flex-col gap-3 md:flex-row">
+              {isOwner ? (
+                <div style={styles.row}>
                   <input
+                    style={{ ...styles.input, flex: 1 }}
+                    placeholder="Invite by email"
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
-                    placeholder="user@example.com"
-                    className="flex-1 rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none placeholder:text-zinc-500"
                   />
-
-                  <select
-                    value={inviteRole}
-                    onChange={(e) =>
-                      setInviteRole(e.target.value as "editor" | "viewer")
-                    }
-                    className="rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none"
-                  >
-                    <option value="editor">Editor</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
-
-                  <button
-                    onClick={inviteMember}
-                    disabled={inviting}
-                    className="rounded-2xl bg-white px-5 py-3 font-medium text-black hover:bg-zinc-200 disabled:opacity-60"
-                  >
-                    {inviting ? "Inviting..." : "Invite"}
+                  <button style={styles.button} onClick={inviteMember}>
+                    Invite
                   </button>
                 </div>
-
-                <div className="mt-4 text-sm text-zinc-500">
-                  Members:
-                  {members.length > 0 ? (
-                    <span className="ml-2">
-                      {members
-                        .map((m) => m.full_name || m.email || m.id)
-                        .sort()
-                        .join(", ")}
-                    </span>
-                  ) : (
-                    <span className="ml-2">No members yet.</span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-6 flex gap-3">
-              <input
-                value={newTask}
-                onChange={(e) => setNewTask(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") addTask();
-                }}
-                placeholder={
-                  selectedListId
-                    ? "Add a new task..."
-                    : "Select or create a list first..."
-                }
-                disabled={!selectedListId || !canEdit}
-                className="flex-1 rounded-2xl border border-white/10 bg-black px-4 py-3 text-white outline-none placeholder:text-zinc-500 disabled:opacity-50"
-              />
-              <button
-                onClick={addTask}
-                disabled={savingTask || !selectedListId || !canEdit}
-                className="rounded-2xl bg-white px-5 py-3 font-medium text-black hover:bg-zinc-200 disabled:opacity-60"
-              >
-                {savingTask ? "Adding..." : "Add"}
-              </button>
-            </div>
-
-            <div className="mt-6 space-y-4">
-              {tasks.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-white/10 p-6 text-zinc-400">
-                  No tasks in this list yet.
-                </div>
               ) : (
-                tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/40 px-4 py-4"
-                  >
-                    <div className="flex items-center gap-4">
-                      <input
-                        type="checkbox"
-                        checked={task.is_completed}
-                        onChange={() => toggleTask(task.id, task.is_completed)}
-                        disabled={!canEdit}
-                        className="h-5 w-5"
-                      />
-                      <div>
-                        <div
-                          className={
-                            task.is_completed
-                              ? "text-zinc-500 line-through"
-                              : "text-white"
-                          }
-                        >
-                          {task.title}
-                        </div>
+                <div style={styles.subtle}>Only the list owner can invite members.</div>
+              )}
 
-                        {(task.priority || task.due_date) && (
-                          <div className="mt-1 text-sm text-zinc-500">
-                            {task.priority ? `Priority: ${task.priority}` : ""}
-                            {task.priority && task.due_date ? " • " : ""}
-                            {task.due_date ? `Due: ${task.due_date}` : ""}
-                          </div>
-                        )}
+              <div style={{ marginTop: 12 }}>
+                {members.map((member) => (
+                  <div key={member.id} style={styles.memberRow}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>
+                        {member.profiles?.email || member.user_id}
                       </div>
+                      <div style={styles.smallText}>{member.role}</div>
                     </div>
 
-                    <button
-                      onClick={() => deleteTask(task.id)}
-                      disabled={!canEdit}
-                      className="rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 hover:bg-white/5 disabled:opacity-50"
-                    >
-                      Delete
-                    </button>
+                    {isOwner && member.role !== 'owner' ? (
+                      <button
+                        style={styles.dangerButton}
+                        onClick={() => removeMember(member)}
+                      >
+                        Remove
+                      </button>
+                    ) : null}
                   </div>
-                ))
-              )}
+                ))}
+              </div>
             </div>
           </section>
         </div>
       </div>
     </main>
-  );
+  )
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    minHeight: '100vh',
+    background: '#f4f7fb',
+    padding: '24px',
+    fontFamily: 'Arial, sans-serif',
+  },
+  container: {
+    maxWidth: 1200,
+    margin: '0 auto',
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    marginBottom: 20,
+  },
+  title: {
+    margin: 0,
+    fontSize: 32,
+  },
+  subtle: {
+    color: '#666',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: '280px 1fr',
+    gap: 20,
+  },
+  sidebar: {
+    background: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
+    height: 'fit-content',
+  },
+  main: {
+    display: 'grid',
+    gap: 20,
+  },
+  panel: {
+    background: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
+  },
+  sectionTitle: {
+    marginTop: 0,
+    marginBottom: 12,
+    fontSize: 20,
+  },
+  row: {
+    display: 'flex',
+    gap: 8,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  input: {
+    padding: '10px 12px',
+    border: '1px solid #d0d7e2',
+    borderRadius: 10,
+    fontSize: 14,
+    background: '#fff',
+  },
+  button: {
+    padding: '10px 14px',
+    border: 'none',
+    borderRadius: 10,
+    background: '#111827',
+    color: '#fff',
+    cursor: 'pointer',
+  },
+  secondaryButton: {
+    padding: '10px 14px',
+    border: '1px solid #d0d7e2',
+    borderRadius: 10,
+    background: '#fff',
+    color: '#111827',
+    cursor: 'pointer',
+  },
+  dangerButton: {
+    padding: '10px 14px',
+    border: 'none',
+    borderRadius: 10,
+    background: '#dc2626',
+    color: '#fff',
+    cursor: 'pointer',
+  },
+  listButton: {
+    width: '100%',
+    textAlign: 'left',
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    background: '#fff',
+    cursor: 'pointer',
+    marginBottom: 8,
+  },
+  listButtonActive: {
+    border: '1px solid #111827',
+    background: '#f9fafb',
+  },
+  taskComposer: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  taskCard: {
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    background: '#fff',
+  },
+  taskTop: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 12,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  checkboxRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  taskTitle: {
+    fontSize: 16,
+    fontWeight: 600,
+  },
+  metaRow: {
+    display: 'flex',
+    gap: 8,
+    marginTop: 10,
+    flexWrap: 'wrap',
+  },
+  metaPill: {
+    fontSize: 12,
+    background: '#f3f4f6',
+    borderRadius: 999,
+    padding: '6px 10px',
+  },
+  memberRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+  },
+  smallText: {
+    fontSize: 12,
+    color: '#666',
+  },
+  success: {
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 10,
+    background: '#ecfdf5',
+    color: '#065f46',
+  },
+  error: {
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 10,
+    background: '#fef2f2',
+    color: '#991b1b',
+  },
+  empty: {
+    color: '#666',
+    padding: '12px 0',
+  },
+  editBlock: {
+    display: 'grid',
+    gap: 8,
+  },
+  card: {
+    maxWidth: 500,
+    margin: '80px auto',
+    background: '#fff',
+    padding: 20,
+    borderRadius: 14,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.06)',
+  },
 }
