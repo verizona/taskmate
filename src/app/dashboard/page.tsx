@@ -32,6 +32,19 @@ type MemberRow = {
   } | null
 }
 
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const update = () => setIsMobile(window.innerWidth <= breakpoint)
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [breakpoint])
+
+  return isMobile
+}
+
 export default function DashboardPage() {
   const [userId, setUserId] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState<string>('')
@@ -56,6 +69,8 @@ export default function DashboardPage() {
 
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+
+  const isMobile = useIsMobile()
 
   useEffect(() => {
     init()
@@ -440,12 +455,23 @@ export default function DashboardPage() {
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        <div style={styles.header}>
+        <div
+          style={{
+            ...styles.header,
+            ...(isMobile ? styles.headerMobile : {}),
+          }}
+        >
           <div>
             <h1 style={styles.title}>TaskMate</h1>
             <div style={styles.subtle}>Signed in as {userEmail}</div>
           </div>
-          <button style={styles.secondaryButton} onClick={signOut}>
+          <button
+            style={{
+              ...styles.secondaryButton,
+              ...(isMobile ? styles.fullWidthButton : {}),
+            }}
+            onClick={signOut}
+          >
             Sign out
           </button>
         </div>
@@ -453,18 +479,37 @@ export default function DashboardPage() {
         {message ? <div style={styles.success}>{message}</div> : null}
         {error ? <div style={styles.error}>{error}</div> : null}
 
-        <div style={styles.grid}>
+        <div
+          style={{
+            ...styles.grid,
+            ...(isMobile ? styles.gridMobile : {}),
+          }}
+        >
           <section style={styles.sidebar}>
             <h2 style={styles.sectionTitle}>Your Lists</h2>
 
-            <div style={styles.row}>
+            <div
+              style={{
+                ...styles.row,
+                ...(isMobile ? styles.stackColumn : {}),
+              }}
+            >
               <input
-                style={styles.input}
+                style={{
+                  ...styles.input,
+                  ...(isMobile ? styles.fullWidthInput : {}),
+                }}
                 placeholder="New list name"
                 value={newListName}
                 onChange={(e) => setNewListName(e.target.value)}
               />
-              <button style={styles.button} onClick={createList}>
+              <button
+                style={{
+                  ...styles.button,
+                  ...(isMobile ? styles.fullWidthButton : {}),
+                }}
+                onClick={createList}
+              >
                 Create
               </button>
             </div>
@@ -479,7 +524,7 @@ export default function DashboardPage() {
                     ...(selectedListId === list.id ? styles.listButtonActive : {}),
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>{list.name}</div>
+                  <div style={{ fontWeight: 700 }}>{list.name}</div>
                   <div style={styles.smallText}>
                     {list.owner_id === userId ? 'Owner' : 'Shared with you'}
                   </div>
@@ -494,21 +539,36 @@ export default function DashboardPage() {
                 {selectedList ? `Tasks · ${selectedList.name}` : 'Tasks'}
               </h2>
 
-              <div style={styles.taskComposer}>
+              <div
+                style={{
+                  ...styles.taskComposer,
+                  ...(isMobile ? styles.taskComposerMobile : {}),
+                }}
+              >
                 <input
-                  style={{ ...styles.input, flex: 2 }}
+                  style={{
+                    ...styles.input,
+                    flex: isMobile ? undefined : 2,
+                    ...(isMobile ? styles.fullWidthInput : {}),
+                  }}
                   placeholder="New task..."
                   value={newTaskTitle}
                   onChange={(e) => setNewTaskTitle(e.target.value)}
                 />
                 <input
-                  style={styles.input}
+                  style={{
+                    ...styles.input,
+                    ...(isMobile ? styles.fullWidthInput : {}),
+                  }}
                   type="date"
                   value={newTaskDueDate}
                   onChange={(e) => setNewTaskDueDate(e.target.value)}
                 />
                 <select
-                  style={styles.input}
+                  style={{
+                    ...styles.input,
+                    ...(isMobile ? styles.fullWidthInput : {}),
+                  }}
                   value={newTaskPriority}
                   onChange={(e) => setNewTaskPriority(e.target.value)}
                 >
@@ -516,7 +576,13 @@ export default function DashboardPage() {
                   <option value="medium">Medium</option>
                   <option value="high">High</option>
                 </select>
-                <button style={styles.button} onClick={addTask}>
+                <button
+                  style={{
+                    ...styles.button,
+                    ...(isMobile ? styles.fullWidthButton : {}),
+                  }}
+                  onClick={addTask}
+                >
                   Add
                 </button>
               </div>
@@ -549,18 +615,40 @@ export default function DashboardPage() {
                             <option value="medium">Medium</option>
                             <option value="high">High</option>
                           </select>
-                          <div style={styles.row}>
-                            <button style={styles.button} onClick={() => saveEdit(task.id)}>
+                          <div
+                            style={{
+                              ...styles.row,
+                              ...(isMobile ? styles.stackColumn : {}),
+                            }}
+                          >
+                            <button
+                              style={{
+                                ...styles.button,
+                                ...(isMobile ? styles.fullWidthButton : {}),
+                              }}
+                              onClick={() => saveEdit(task.id)}
+                            >
                               Save
                             </button>
-                            <button style={styles.secondaryButton} onClick={cancelEdit}>
+                            <button
+                              style={{
+                                ...styles.secondaryButton,
+                                ...(isMobile ? styles.fullWidthButton : {}),
+                              }}
+                              onClick={cancelEdit}
+                            >
                               Cancel
                             </button>
                           </div>
                         </div>
                       ) : (
                         <>
-                          <div style={styles.taskTop}>
+                          <div
+                            style={{
+                              ...styles.taskTop,
+                              ...(isMobile ? styles.taskTopMobile : {}),
+                            }}
+                          >
                             <label style={styles.checkboxRow}>
                               <input
                                 type="checkbox"
@@ -578,15 +666,26 @@ export default function DashboardPage() {
                               </span>
                             </label>
 
-                            <div style={styles.row}>
+                            <div
+                              style={{
+                                ...styles.row,
+                                ...(isMobile ? styles.actionsMobile : {}),
+                              }}
+                            >
                               <button
-                                style={styles.secondaryButton}
+                                style={{
+                                  ...styles.secondaryButton,
+                                  ...(isMobile ? styles.actionButtonMobile : {}),
+                                }}
                                 onClick={() => startEdit(task)}
                               >
                                 Edit
                               </button>
                               <button
-                                style={styles.dangerButton}
+                                style={{
+                                  ...styles.dangerButton,
+                                  ...(isMobile ? styles.actionButtonMobile : {}),
+                                }}
                                 onClick={() => deleteTask(task.id)}
                               >
                                 Delete
@@ -594,7 +693,12 @@ export default function DashboardPage() {
                             </div>
                           </div>
 
-                          <div style={styles.metaRow}>
+                          <div
+                            style={{
+                              ...styles.metaRow,
+                              ...(isMobile ? styles.metaRowMobile : {}),
+                            }}
+                          >
                             <span style={styles.metaPill}>
                               Priority: {task.priority || 'medium'}
                             </span>
@@ -614,14 +718,29 @@ export default function DashboardPage() {
               <h2 style={styles.sectionTitle}>Members / Invite</h2>
 
               {isOwner ? (
-                <div style={styles.row}>
+                <div
+                  style={{
+                    ...styles.row,
+                    ...(isMobile ? styles.stackColumn : {}),
+                  }}
+                >
                   <input
-                    style={{ ...styles.input, flex: 1 }}
+                    style={{
+                      ...styles.input,
+                      flex: isMobile ? undefined : 1,
+                      ...(isMobile ? styles.fullWidthInput : {}),
+                    }}
                     placeholder="Invite by email"
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
                   />
-                  <button style={styles.button} onClick={inviteMember}>
+                  <button
+                    style={{
+                      ...styles.button,
+                      ...(isMobile ? styles.fullWidthButton : {}),
+                    }}
+                    onClick={inviteMember}
+                  >
                     Invite
                   </button>
                 </div>
@@ -631,9 +750,15 @@ export default function DashboardPage() {
 
               <div style={{ marginTop: 12 }}>
                 {members.map((member) => (
-                  <div key={member.id} style={styles.memberRow}>
+                  <div
+                    key={member.id}
+                    style={{
+                      ...styles.memberRow,
+                      ...(isMobile ? styles.memberRowMobile : {}),
+                    }}
+                  >
                     <div>
-                      <div style={{ fontWeight: 600 }}>
+                      <div style={{ fontWeight: 700 }}>
                         {member.profiles?.email || member.user_id}
                       </div>
                       <div style={styles.smallText}>{member.role}</div>
@@ -641,7 +766,10 @@ export default function DashboardPage() {
 
                     {isOwner && member.role !== 'owner' ? (
                       <button
-                        style={styles.dangerButton}
+                        style={{
+                          ...styles.dangerButton,
+                          ...(isMobile ? styles.fullWidthButton : {}),
+                        }}
                         onClick={() => removeMember(member)}
                       >
                         Remove
@@ -662,7 +790,7 @@ const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
     background: '#eef2f7',
-    padding: '24px',
+    padding: '16px',
     fontFamily: 'Arial, sans-serif',
   },
   container: {
@@ -673,7 +801,12 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 16,
     marginBottom: 24,
+  },
+  headerMobile: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
   },
   title: {
     margin: 0,
@@ -682,202 +815,229 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#111827',
   },
   subtle: {
-    color: '#4b5563',
+    color: '#374151',
     fontSize: 14,
     marginTop: 4,
+    wordBreak: 'break-word',
   },
-
   grid: {
     display: 'grid',
     gridTemplateColumns: '280px 1fr',
     gap: 20,
   },
-
+  gridMobile: {
+    gridTemplateColumns: '1fr',
+  },
   sidebar: {
     background: '#ffffff',
     borderRadius: 14,
     padding: 16,
-    border: '1px solid #e5e7eb',
+    border: '1px solid #d1d5db',
   },
-
   main: {
     display: 'grid',
     gap: 20,
   },
-
   panel: {
     background: '#ffffff',
     borderRadius: 14,
     padding: 18,
-    border: '1px solid #e5e7eb',
+    border: '1px solid #d1d5db',
   },
-
   sectionTitle: {
+    marginTop: 0,
     marginBottom: 12,
-    fontSize: 18,
-    fontWeight: 600,
+    fontSize: 20,
+    fontWeight: 700,
     color: '#111827',
   },
-
   row: {
     display: 'flex',
     gap: 8,
     alignItems: 'center',
     flexWrap: 'wrap',
   },
-
+  stackColumn: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
   input: {
-    padding: '10px 12px',
-    border: '1px solid #d1d5db',
-    borderRadius: 8,
-    fontSize: 14,
+    padding: '12px 14px',
+    border: '1px solid #cbd5e1',
+    borderRadius: 10,
+    fontSize: 16,
     background: '#fff',
     color: '#111827',
+    minWidth: 0,
   },
-
+  fullWidthInput: {
+    width: '100%',
+  },
   button: {
-    padding: '10px 14px',
-    borderRadius: 8,
+    padding: '12px 16px',
+    borderRadius: 10,
     background: '#2563eb',
     color: '#fff',
     border: 'none',
     cursor: 'pointer',
-    fontWeight: 600,
+    fontWeight: 700,
+    fontSize: 16,
   },
-
   secondaryButton: {
-    padding: '10px 14px',
-    borderRadius: 8,
+    padding: '12px 16px',
+    borderRadius: 10,
     background: '#fff',
-    border: '1px solid #d1d5db',
+    border: '1px solid #cbd5e1',
     cursor: 'pointer',
-    fontWeight: 500,
+    fontWeight: 600,
+    fontSize: 16,
+    color: '#111827',
   },
-
   dangerButton: {
-    padding: '10px 14px',
-    borderRadius: 8,
+    padding: '12px 16px',
+    borderRadius: 10,
     background: '#dc2626',
     color: '#fff',
     border: 'none',
     cursor: 'pointer',
-    fontWeight: 600,
+    fontWeight: 700,
+    fontSize: 16,
   },
-
+  fullWidthButton: {
+    width: '100%',
+    justifyContent: 'center',
+  },
   listButton: {
     width: '100%',
     textAlign: 'left',
-    border: '1px solid #e5e7eb',
-    borderRadius: 10,
-    padding: 12,
+    border: '1px solid #d1d5db',
+    borderRadius: 12,
+    padding: 14,
     background: '#fff',
     cursor: 'pointer',
-    marginBottom: 8,
+    marginBottom: 10,
+    color: '#111827',
   },
-
   listButtonActive: {
     border: '2px solid #2563eb',
     background: '#eff6ff',
   },
-
   taskComposer: {
     display: 'flex',
     gap: 8,
     flexWrap: 'wrap',
   },
-
+  taskComposerMobile: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
   taskCard: {
-    border: '1px solid #e5e7eb',
-    borderRadius: 10,
+    border: '1px solid #d1d5db',
+    borderRadius: 12,
     padding: 14,
-    marginBottom: 10,
+    marginBottom: 12,
     background: '#ffffff',
   },
-
   taskTop: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 12,
+    flexWrap: 'wrap',
   },
-
+  taskTopMobile: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
   checkboxRow: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 10,
     flex: 1,
   },
-
   taskTitle: {
-    fontSize: 15,
-    fontWeight: 600,
+    fontSize: 16,
+    fontWeight: 700,
     color: '#111827',
+    wordBreak: 'break-word',
   },
-
+  actionsMobile: {
+    width: '100%',
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 8,
+  },
+  actionButtonMobile: {
+    width: '100%',
+  },
   metaRow: {
     marginTop: 10,
     display: 'flex',
     gap: 8,
+    flexWrap: 'wrap',
   },
-
+  metaRowMobile: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
   metaPill: {
     fontSize: 12,
-    background: '#f3f4f6',
+    background: '#e5e7eb',
     borderRadius: 999,
     padding: '6px 10px',
-    color: '#374151',
+    color: '#111827',
+    fontWeight: 600,
   },
-
   memberRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    border: '1px solid #e5e7eb',
-    borderRadius: 10,
+    gap: 12,
+    border: '1px solid #d1d5db',
+    borderRadius: 12,
     padding: 12,
     marginBottom: 8,
     background: '#fff',
   },
-
+  memberRowMobile: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
   smallText: {
     fontSize: 12,
-    color: '#6b7280',
+    color: '#4b5563',
+    marginTop: 4,
   },
-
   success: {
     marginBottom: 12,
     padding: 12,
-    borderRadius: 8,
-    background: '#d1fae5',
-    color: '#065f46',
-    fontWeight: 500,
+    borderRadius: 10,
+    background: '#dcfce7',
+    color: '#166534',
+    fontWeight: 600,
   },
-
   error: {
     marginBottom: 12,
     padding: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     background: '#fee2e2',
     color: '#991b1b',
-    fontWeight: 500,
+    fontWeight: 600,
   },
-
   empty: {
-    color: '#6b7280',
+    color: '#4b5563',
     padding: '12px 0',
   },
-
   editBlock: {
     display: 'grid',
     gap: 8,
   },
-
   card: {
     maxWidth: 500,
     margin: '80px auto',
-    background: '#fff',
+    background: '#ffffff',
     padding: 20,
     borderRadius: 14,
-    border: '1px solid #e5e7eb',
+    border: '1px solid #d1d5db',
   },
 }
