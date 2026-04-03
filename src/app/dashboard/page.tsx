@@ -723,43 +723,60 @@ export default function DashboardPage() {
   }
 
   async function deleteCurrentList() {
-    try {
-      if (!selectedListId || !userId) return;
+  try {
+    if (!selectedListId || !userId) return;
 
-      const currentList = lists.find((l) => l.id === selectedListId);
-      if (!currentList) return;
+    const currentList = lists.find((l) => l.id === selectedListId);
+    if (!currentList) return;
 
-      if (currentList.owner_id !== userId) {
-        setError('Only the owner can delete this list.');
-        return;
-      }
-
-      const ok = window.confirm(
-        `Delete list "${currentList.name}"? This will remove its tasks and memberships.`
-      );
-      if (!ok) return;
-
-      setDeletingList(true);
-      setError('');
-      setMessage('');
-
-      const { error } = await supabase.from('lists').delete().eq('id', selectedListId);
-
-      if (error) throw error;
-
-      setExpandedTaskId(null);
-      setEditingTaskId(null);
-      cancelEditList();
-      await loadLists();
-      await loadAllTasks();
-      setScreen('home');
-      setMessage('List deleted');
-    } catch (e: any) {
-      setError(e.message || 'Failed to delete list');
-    } finally {
-      setDeletingList(false);
+    if (currentList.owner_id !== userId) {
+      setError('Only the owner can delete this list.');
+      return;
     }
+
+    const ok = window.confirm(
+      `Delete list "${currentList.name}"? This will remove its tasks and memberships.`
+    );
+    if (!ok) return;
+
+    setDeletingList(true);
+    setError('');
+    setMessage('');
+
+    const { error: tasksError } = await supabase
+      .from('tasks')
+      .delete()
+      .eq('list_id', selectedListId);
+
+    if (tasksError) throw tasksError;
+
+    const { error: membersError } = await supabase
+      .from('list_members')
+      .delete()
+      .eq('list_id', selectedListId);
+
+    if (membersError) throw membersError;
+
+    const { error: listError } = await supabase
+      .from('lists')
+      .delete()
+      .eq('id', selectedListId);
+
+    if (listError) throw listError;
+
+    setExpandedTaskId(null);
+    setEditingTaskId(null);
+    cancelEditList();
+    await loadLists();
+    await loadAllTasks();
+    setScreen('home');
+    setMessage('List deleted');
+  } catch (e: any) {
+    setError(e.message || 'Failed to delete list');
+  } finally {
+    setDeletingList(false);
   }
+}
 
   async function signOut() {
     await supabase.auth.signOut();
