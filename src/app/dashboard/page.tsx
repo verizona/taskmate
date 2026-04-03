@@ -155,7 +155,7 @@ export default function DashboardPage() {
   useEffect(() => {
     let mounted = true;
 
-    const bootstrap = async () => {
+    async function bootstrap() {
       if (bootstrappedRef.current) return;
       bootstrappedRef.current = true;
 
@@ -165,18 +165,18 @@ export default function DashboardPage() {
         setMessage('');
 
         const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
 
-        if (userError) throw userError;
+        if (sessionError) throw sessionError;
 
-        if (!user) {
-          if (mounted) {
-            window.location.href = '/';
-          }
+        if (!session?.user) {
+          if (mounted) window.location.href = '/';
           return;
         }
+
+        const user = session.user;
 
         await initializeDashboard(user.id, user.email ?? '', {
           fullName:
@@ -189,46 +189,19 @@ export default function DashboardPage() {
             '',
         });
       } catch (e: any) {
-        if (mounted) {
-          setError(e?.message || 'Failed to load dashboard');
-        }
+        if (mounted) setError(e?.message || 'Failed to load dashboard');
       } finally {
-        if (mounted) {
-          setLoading(false);
-        }
+        if (mounted) setLoading(false);
       }
-    };
+    }
 
     bootstrap();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!mounted) return;
-
+    } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
         window.location.href = '/';
-        return;
-      }
-
-      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
-        try {
-          setLoading(true);
-          await initializeDashboard(session.user.id, session.user.email ?? '', {
-            fullName:
-              (session.user.user_metadata?.full_name as string | undefined) ||
-              (session.user.user_metadata?.name as string | undefined) ||
-              '',
-            avatarUrl:
-              (session.user.user_metadata?.avatar_url as string | undefined) ||
-              (session.user.user_metadata?.picture as string | undefined) ||
-              '',
-          });
-        } catch (e: any) {
-          setError(e?.message || 'Failed to refresh dashboard');
-        } finally {
-          setLoading(false);
-        }
       }
     });
 
@@ -304,119 +277,114 @@ export default function DashboardPage() {
 
     if (memberError) throw memberError;
 
-    // Best effort only. Do not break dashboard load if old orphan tasks exist and RLS blocks the update.
-    const { error: backfillError } = await supabase
+    await supabase
       .from('tasks')
       .update({ list_id: insertedList.id })
       .eq('user_id', uid)
       .is('list_id', null);
-
-    if (backfillError) {
-      console.warn('Task backfill skipped:', backfillError.message);
-    }
   }
 
   async function loadLists(uid?: string) {
-  const actualUserId = uid || userId;
-  if (!actualUserId) return;
+    const actualUserId = uid || userId;
+    if (!actualUserId) return;
 
-  const { data: memberships, error: membershipError } = await supabase
-    .from('list_members')
-    .select(`
-      list_id,
-      role,
-      lists (
-        id,
-        name,
-        owner_id,
-        created_at
-      )
-    `)
-    .eq('user_id', actualUserId);
+    const { data: memberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select(`
+        list_id,
+        role,
+        lists (
+          id,
+          name,
+          owner_id,
+          created_at
+        )
+      `)
+      .eq('user_id', actualUserId);
 
-  if (membershipError) throw membershipError;
+    if (membershipError) throw membershipError;
 
-  const rawLists = (memberships || [])
-    .map((m: any) => m.lists)
-    .filter(Boolean) as ListRow[];
+    const rawLists = (memberships || [])
+      .map((m: any) => m.lists)
+      .filter(Boolean) as ListRow[];
 
-  const loadedLists = rawLists.filter(
-    (list, index, arr) => arr.findIndex((x) => x.id === list.id) === index
-  );
+    const loadedLists = rawLists.filter(
+      (list, index, arr) => arr.findIndex((x) => x.id === list.id) === index
+    );
 
-  loadedLists.sort((a, b) => {
-    const aTime = new Date(a.created_at).getTime();
-    const bTime = new Date(b.created_at).getTime();
-    return aTime - bTime;
-  });
+    loadedLists.sort((a, b) => {
+      const aTime = new Date(a.created_at).getTime();
+      const bTime = new Date(b.created_at).getTime();
+      return aTime - bTime;
+    });
 
-  setLists(loadedLists);
+    setLists(loadedLists);
 
-  setSelectedListId((current) => {
-    const stillExists = current ? loadedLists.some((l) => l.id === current) : false;
-    const nextId = stillExists ? current : loadedLists[0]?.id || '';
-    setNewTaskListId((prev) => prev || nextId);
-    return nextId;
-  });
-}
+    setSelectedListId((current) => {
+      const stillExists = current ? loadedLists.some((l) => l.id === current) : false;
+      const nextId = stillExists ? current : loadedLists[0]?.id || '';
+      setNewTaskListId((prev) => prev || nextId);
+      return nextId;
+    });
+  }
 
   async function loadAllTasks(uid?: string) {
-  const actualUserId = uid || userId;
-  if (!actualUserId) return;
+    const actualUserId = uid || userId;
+    if (!actualUserId) return;
 
-  const { data: memberships, error: membershipError } = await supabase
-    .from('list_members')
-    .select('list_id')
-    .eq('user_id', actualUserId);
+    const { data: memberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select('list_id')
+      .eq('user_id', actualUserId);
 
-  if (membershipError) throw membershipError;
+    if (membershipError) throw membershipError;
 
-  const ids = (memberships || []).map((m) => m.list_id);
-  if (!ids.length) {
-    setTasks([]);
-    return;
+    const ids = (memberships || []).map((m) => m.list_id);
+    if (!ids.length) {
+      setTasks([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('tasks')
+      .select(
+        'id, title, is_complete, user_id, list_id, due_date, due_time, priority, reminder_minutes, notes, created_at'
+      )
+      .in('list_id', ids)
+      .order('is_complete', { ascending: true })
+      .order('due_date', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const rows: TaskRow[] = Array.isArray(data) ? (data as unknown as TaskRow[]) : [];
+    setTasks(rows);
   }
-
-  const { data, error } = await supabase
-    .from('tasks')
-    .select(
-      'id, title, is_complete, user_id, list_id, due_date, due_time, priority, reminder_minutes, notes, created_at'
-    )
-    .in('list_id', ids)
-    .order('is_complete', { ascending: true })
-    .order('due_date', { ascending: true, nullsFirst: false })
-    .order('created_at', { ascending: false });
-
-  if (error) throw error;
-
-  const rows: TaskRow[] = Array.isArray(data) ? (data as unknown as TaskRow[]) : [];
-  setTasks(rows);
-}
 
   async function loadMembers(listId: string) {
-  const { data, error } = await supabase
-    .from('list_members')
-    .select(`
-      id,
-      created_at,
-      list_id,
-      user_id,
-      role,
-      profiles (
-        email
-      )
-    `)
-    .eq('list_id', listId)
-    .order('created_at', { ascending: true });
+    const { data, error } = await supabase
+      .from('list_members')
+      .select(`
+        id,
+        created_at,
+        list_id,
+        user_id,
+        role,
+        profiles (
+          email
+        )
+      `)
+      .eq('list_id', listId)
+      .order('created_at', { ascending: true });
 
-  if (error) {
-    setError(error.message);
-    return;
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    const rows: MemberRow[] = Array.isArray(data) ? (data as unknown as MemberRow[]) : [];
+    setMembers(rows);
   }
-
-  const rows: MemberRow[] = Array.isArray(data) ? (data as unknown as MemberRow[]) : [];
-  setMembers(rows);
-}
 
   async function createList() {
     try {
