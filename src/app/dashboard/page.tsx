@@ -735,7 +735,7 @@ export default function DashboardPage() {
     }
 
     const ok = window.confirm(
-      `Delete list "${currentList.name}"? This will remove its tasks and memberships.`
+      `Delete list "${currentList.name}"?`
     );
     if (!ok) return;
 
@@ -743,30 +743,13 @@ export default function DashboardPage() {
     setError('');
     setMessage('');
 
-    const { error: tasksError } = await supabase
-      .from('tasks')
-      .delete()
-      .eq('list_id', selectedListId);
-
-    if (tasksError) throw tasksError;
-
-    const { error: membersError } = await supabase
-      .from('list_members')
-      .delete()
-      .eq('list_id', selectedListId);
-
-    if (membersError) throw membersError;
-
-    const { error: listError } = await supabase
+    const { error } = await supabase
       .from('lists')
       .delete()
       .eq('id', selectedListId);
 
-    if (listError) throw listError;
+    if (error) throw error;
 
-    setExpandedTaskId(null);
-    setEditingTaskId(null);
-    cancelEditList();
     await loadLists();
     await loadAllTasks();
     setScreen('home');
