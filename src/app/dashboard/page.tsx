@@ -336,10 +336,10 @@ export default function DashboardPage() {
 
     if (membershipError) throw membershipError;
 
-    const loadedLists = ((memberships || [])
-      .map((m: any) => m.lists)
-      .filter(Boolean) as ListRow[]).filter(
-      (list, index, arr) => arr.findIndex((x) => x.id === list.id) === index
+    const loadedLists: ListRow[] = (memberships || [])
+  .map((m: any) => m.lists)
+  .filter(Boolean)
+  .filter((list: ListRow, index: number, arr: ListRow[]) => arr.findIndex((x) => x.id === list.id) === index);
     );
 
     loadedLists.sort((a, b) => {
