@@ -1,34 +1,23 @@
-"use client";
+'use client';
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 
 export default function AuthCallbackPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const handleAuth = async () => {
-      try {
-        // 🔥 This handles BOTH cases automatically
-        const { data, error } = await supabase.auth.getSession();
+    async function handleAuth() {
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get('code');
 
-        if (error) {
-          console.error("Session error:", error.message);
-          router.replace("/");
-          return;
-        }
-
-        if (data.session) {
-          router.replace("/dashboard");
-        } else {
-          router.replace("/");
-        }
-      } catch (err) {
-        console.error("Auth callback error:", err);
-        router.replace("/");
+      if (code) {
+        await supabase.auth.exchangeCodeForSession(code);
       }
-    };
+
+      router.replace('/dashboard');
+    }
 
     handleAuth();
   }, [router]);
@@ -39,4 +28,3 @@ export default function AuthCallbackPage() {
     </main>
   );
 }
-
