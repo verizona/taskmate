@@ -1,200 +1,209 @@
-'use client'
+'use client';
 
-import { useEffect, useMemo, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useEffect, useMemo, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 
 type ListRow = {
-  id: string
-  name: string
-  owner_id: string
-  created_at: string
-}
+  id: string;
+  name: string;
+  owner_id: string;
+  created_at: string;
+};
 
 type TaskRow = {
-  id: string
-  title: string
-  is_complete: boolean
-  user_id: string | null
-  list_id: string | null
-  due_date: string | null
-  due_time?: string | null
-  priority: string | null
-  reminder_minutes: number | null
-  notes?: string | null
-  created_at?: string
-}
+  id: string;
+  title: string;
+  is_complete: boolean;
+  user_id: string | null;
+  list_id: string | null;
+  due_date: string | null;
+  due_time?: string | null;
+  priority: string | null;
+  reminder_minutes: number | null;
+  notes?: string | null;
+  created_at?: string;
+};
 
 type MemberRow = {
-  id: string
-  list_id: string
-  user_id: string
-  role: 'owner' | 'editor' | 'member'
-  created_at: string
+  id: string;
+  list_id: string;
+  user_id: string;
+  role: 'owner' | 'editor' | 'member';
+  created_at: string;
   profiles?: {
-    email: string | null
-  } | null
-}
+    email: string | null;
+  } | null;
+};
 
-type Screen = 'home' | 'today' | 'all' | 'completed' | 'list'
+type Screen = 'home' | 'today' | 'all' | 'completed' | 'list';
 
 function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(false)
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    const update = () => setIsMobile(window.innerWidth <= breakpoint)
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [breakpoint])
+    const update = () => setIsMobile(window.innerWidth <= breakpoint);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [breakpoint]);
 
-  return isMobile
+  return isMobile;
 }
 
 function todayYMD() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const d = String(now.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function formatReminder(minutes: number | null | undefined) {
-  if (minutes == null) return 'No reminder'
-  if (minutes === 0) return 'At time'
-  if (minutes === 5) return '5 min before'
-  if (minutes === 10) return '10 min before'
-  if (minutes === 15) return '15 min before'
-  if (minutes === 30) return '30 min before'
-  if (minutes === 60) return '1 hour before'
-  if (minutes === 120) return '2 hours before'
-  if (minutes === 1440) return '1 day before'
-  if (minutes === 2880) return '2 days before'
-  if (minutes === 10080) return '1 week before'
-  return `${minutes} min before`
+  if (minutes == null) return 'No reminder';
+  if (minutes === 0) return 'At time';
+  if (minutes === 5) return '5 min before';
+  if (minutes === 10) return '10 min before';
+  if (minutes === 15) return '15 min before';
+  if (minutes === 30) return '30 min before';
+  if (minutes === 60) return '1 hour before';
+  if (minutes === 120) return '2 hours before';
+  if (minutes === 1440) return '1 day before';
+  if (minutes === 2880) return '2 days before';
+  if (minutes === 10080) return '1 week before';
+  return `${minutes} min before`;
 }
 
 function formatTaskDate(dateString: string | null | undefined, timeString?: string | null) {
-  if (!dateString) return ''
-  const date = new Date(`${dateString}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return dateString
-  const datePart = date.toLocaleDateString()
-  if (!timeString) return datePart
+  if (!dateString) return '';
+  const date = new Date(`${dateString}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return dateString;
+  const datePart = date.toLocaleDateString();
+  if (!timeString) return datePart;
 
-  const [hh, mm] = timeString.split(':')
-  if (hh == null || mm == null) return datePart
-  const temp = new Date()
-  temp.setHours(Number(hh), Number(mm), 0, 0)
-  const timePart = temp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  return `${datePart}, ${timePart}`
+  const [hh, mm] = timeString.split(':');
+  if (hh == null || mm == null) return datePart;
+  const temp = new Date();
+  temp.setHours(Number(hh), Number(mm), 0, 0);
+  const timePart = temp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `${datePart}, ${timePart}`;
 }
 
 function isOverdue(task: TaskRow) {
-  if (task.is_complete || !task.due_date) return false
-  const now = new Date()
-  const due = new Date(`${task.due_date}T${task.due_time || '23:59'}:00`)
-  return due.getTime() < now.getTime()
+  if (task.is_complete || !task.due_date) return false;
+  const now = new Date();
+  const due = new Date(`${task.due_date}T${task.due_time || '23:59'}:00`);
+  return due.getTime() < now.getTime();
 }
 
 export default function DashboardPage() {
-  const isMobile = useIsMobile()
+  const isMobile = useIsMobile();
 
-  const [userId, setUserId] = useState<string | null>(null)
-  const [userEmail, setUserEmail] = useState<string>('')
-  const [loading, setLoading] = useState(true)
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string>('');
+  const [loading, setLoading] = useState(true);
 
-  const [lists, setLists] = useState<ListRow[]>([])
-  const [tasks, setTasks] = useState<TaskRow[]>([])
-  const [members, setMembers] = useState<MemberRow[]>([])
+  const [lists, setLists] = useState<ListRow[]>([]);
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [members, setMembers] = useState<MemberRow[]>([]);
 
-  const [selectedListId, setSelectedListId] = useState<string>('')
-  const [screen, setScreen] = useState<Screen>('home')
+  const [selectedListId, setSelectedListId] = useState<string>('');
+  const [screen, setScreen] = useState<Screen>('home');
 
-  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
-  const [newListName, setNewListName] = useState('')
-  const [inviteEmail, setInviteEmail] = useState('')
+  const [newListName, setNewListName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
 
-  const [editingListId, setEditingListId] = useState<string | null>(null)
-  const [editListName, setEditListName] = useState('')
+  const [editingListId, setEditingListId] = useState<string | null>(null);
+  const [editListName, setEditListName] = useState('');
 
-  const [newTaskTitle, setNewTaskTitle] = useState('')
-  const [newTaskNotes, setNewTaskNotes] = useState('')
-  const [newTaskDateEnabled, setNewTaskDateEnabled] = useState(true)
-  const [newTaskTimeEnabled, setNewTaskTimeEnabled] = useState(false)
-  const [newTaskDueDate, setNewTaskDueDate] = useState(todayYMD())
-  const [newTaskDueTime, setNewTaskDueTime] = useState('')
-  const [newTaskPriority, setNewTaskPriority] = useState('medium')
-  const [newTaskReminder, setNewTaskReminder] = useState('60')
-  const [newTaskListId, setNewTaskListId] = useState('')
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskNotes, setNewTaskNotes] = useState('');
+  const [newTaskDateEnabled, setNewTaskDateEnabled] = useState(true);
+  const [newTaskTimeEnabled, setNewTaskTimeEnabled] = useState(false);
+  const [newTaskDueDate, setNewTaskDueDate] = useState(todayYMD());
+  const [newTaskDueTime, setNewTaskDueTime] = useState('');
+  const [newTaskPriority, setNewTaskPriority] = useState('medium');
+  const [newTaskReminder, setNewTaskReminder] = useState('60');
+  const [newTaskListId, setNewTaskListId] = useState('');
 
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
 
-  const [editTitle, setEditTitle] = useState('')
-  const [editNotes, setEditNotes] = useState('')
-  const [editDateEnabled, setEditDateEnabled] = useState(true)
-  const [editTimeEnabled, setEditTimeEnabled] = useState(false)
-  const [editDueDate, setEditDueDate] = useState('')
-  const [editDueTime, setEditDueTime] = useState('')
-  const [editPriority, setEditPriority] = useState('medium')
-  const [editReminder, setEditReminder] = useState('60')
+  const [editTitle, setEditTitle] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editDateEnabled, setEditDateEnabled] = useState(true);
+  const [editTimeEnabled, setEditTimeEnabled] = useState(false);
+  const [editDueDate, setEditDueDate] = useState('');
+  const [editDueTime, setEditDueTime] = useState('');
+  const [editPriority, setEditPriority] = useState('medium');
+  const [editReminder, setEditReminder] = useState('60');
 
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
-  const [deletingList, setDeletingList] = useState(false)
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [deletingList, setDeletingList] = useState(false);
 
   useEffect(() => {
-    init()
-  }, [])
+    init();
+  }, []);
 
   useEffect(() => {
     if (selectedListId) {
-      loadMembers(selectedListId)
+      loadMembers(selectedListId);
     } else {
-      setMembers([])
+      setMembers([]);
     }
-  }, [selectedListId])
+  }, [selectedListId]);
 
   async function init() {
     try {
-      setLoading(true)
-      setError('')
-      setMessage('')
+      setLoading(true);
+      setError('');
+      setMessage('');
 
       const {
         data: { session },
         error: sessionError,
-      } = await supabase.auth.getSession()
+      } = await supabase.auth.getSession();
 
-      if (sessionError) throw sessionError
+      if (sessionError) throw sessionError;
       if (!session?.user) {
-        window.location.href = '/'
-        return
+        window.location.href = '/';
+        return;
       }
 
-      const uid = session.user.id
-      const email = session.user.email ?? ''
+      const uid = session.user.id;
+      const email = session.user.email ?? '';
 
-      setUserId(uid)
-      setUserEmail(email)
+      setUserId(uid);
+      setUserEmail(email);
 
-      await ensureProfile(uid, email)
-      await ensurePersonalList(uid)
-      await loadLists(uid)
-      await loadAllTasks(uid)
+      await ensureProfile(uid, email);
+      await ensurePersonalList(uid);
+      await loadLists(uid);
+      await loadAllTasks(uid);
     } catch (e: any) {
-      setError(e.message || 'Failed to load dashboard')
+      setError(e.message || 'Failed to load dashboard');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
   async function ensureProfile(uid: string, email: string) {
     const { error } = await supabase
       .from('profiles')
-      .upsert({ id: uid, email }, { onConflict: 'id' })
+      .upsert({ id: uid, email }, { onConflict: 'id' });
 
-    if (error) throw error
+    if (error) throw error;
+
+    const { data, error: confirmError } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .eq('id', uid)
+      .single();
+
+    if (confirmError) throw confirmError;
+    if (!data?.id) throw new Error('Profile was not created correctly');
   }
 
   async function ensurePersonalList(uid: string) {
@@ -202,42 +211,61 @@ export default function DashboardPage() {
       .from('list_members')
       .select('id, list_id')
       .eq('user_id', uid)
-      .limit(1)
+      .limit(1);
 
-    if (membershipError) throw membershipError
-    if (existingMemberships && existingMemberships.length > 0) return
+    if (membershipError) throw membershipError;
+    if (existingMemberships && existingMemberships.length > 0) return;
 
-    const { data: newList, error: listError } = await supabase
+    const { data: insertedList, error: listError } = await supabase
       .from('lists')
       .insert({
         name: 'My Tasks',
         owner_id: uid,
       })
-      .select()
-      .single()
+      .select('id, name, owner_id, created_at')
+      .single();
 
-    if (listError) throw listError
+    if (listError) throw listError;
+    if (!insertedList?.id) {
+      throw new Error('Failed to create personal list: missing list id');
+    }
+
+    console.log('insertedList', insertedList);
+
+    const { data: confirmedList, error: confirmError } = await supabase
+      .from('lists')
+      .select('id')
+      .eq('id', insertedList.id)
+      .single();
+
+    if (confirmError) throw confirmError;
+    if (!confirmedList?.id) {
+      throw new Error('Created personal list could not be confirmed');
+    }
+
+    console.log('confirmedList', confirmedList);
+    console.log('uid', uid);
 
     const { error: memberError } = await supabase.from('list_members').insert({
-      list_id: newList.id,
+      list_id: confirmedList.id,
       user_id: uid,
       role: 'owner',
-    })
+    });
 
-    if (memberError) throw memberError
+    if (memberError) throw memberError;
 
     const { error: backfillError } = await supabase
       .from('tasks')
-      .update({ list_id: newList.id })
+      .update({ list_id: confirmedList.id })
       .eq('user_id', uid)
-      .is('list_id', null)
+      .is('list_id', null);
 
-    if (backfillError) throw backfillError
+    if (backfillError) throw backfillError;
   }
 
   async function loadLists(uid?: string) {
-    const actualUserId = uid || userId
-    if (!actualUserId) return
+    const actualUserId = uid || userId;
+    if (!actualUserId) return;
 
     const { data: memberships, error: membershipError } = await supabase
       .from('list_members')
@@ -251,39 +279,39 @@ export default function DashboardPage() {
           created_at
         )
       `)
-      .eq('user_id', actualUserId)
+      .eq('user_id', actualUserId);
 
-    if (membershipError) throw membershipError
+    if (membershipError) throw membershipError;
 
     const loadedLists = (memberships || [])
       .map((m: any) => m.lists)
-      .filter(Boolean) as ListRow[]
+      .filter(Boolean) as ListRow[];
 
-    setLists(loadedLists)
+    setLists(loadedLists);
 
     setSelectedListId((current) => {
-      const selected = current && loadedLists.some((l) => l.id === current)
-      const nextId = selected ? current : loadedLists[0]?.id || ''
-      setNewTaskListId((prev) => prev || nextId)
-      return nextId
-    })
+      const selected = current && loadedLists.some((l) => l.id === current);
+      const nextId = selected ? current : loadedLists[0]?.id || '';
+      setNewTaskListId((prev) => prev || nextId);
+      return nextId;
+    });
   }
 
   async function loadAllTasks(uid?: string) {
-    const actualUserId = uid || userId
-    if (!actualUserId) return
+    const actualUserId = uid || userId;
+    if (!actualUserId) return;
 
     const { data: memberships, error: membershipError } = await supabase
       .from('list_members')
       .select('list_id')
-      .eq('user_id', actualUserId)
+      .eq('user_id', actualUserId);
 
-    if (membershipError) throw membershipError
+    if (membershipError) throw membershipError;
 
-    const ids = (memberships || []).map((m) => m.list_id)
+    const ids = (memberships || []).map((m) => m.list_id);
     if (!ids.length) {
-      setTasks([])
-      return
+      setTasks([]);
+      return;
     }
 
     const { data, error } = await supabase
@@ -292,10 +320,10 @@ export default function DashboardPage() {
       .in('list_id', ids)
       .order('is_complete', { ascending: true })
       .order('due_date', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: false })
+      .order('created_at', { ascending: false });
 
-    if (error) throw error
-    setTasks(data || [])
+    if (error) throw error;
+    setTasks(data || []);
   }
 
   async function loadMembers(listId: string) {
@@ -308,23 +336,23 @@ export default function DashboardPage() {
         )
       `)
       .eq('list_id', listId)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: true });
 
     if (error) {
-      setError(error.message)
-      return
+      setError(error.message);
+      return;
     }
 
-    setMembers((data as MemberRow[]) || [])
+    setMembers((data as MemberRow[]) || []);
   }
 
   async function createList() {
     try {
-      if (!userId) return
-      if (!newListName.trim()) return
+      if (!userId) return;
+      if (!newListName.trim()) return;
 
-      setError('')
-      setMessage('')
+      setError('');
+      setMessage('');
 
       const { data: list, error: listError } = await supabase
         .from('lists')
@@ -333,83 +361,83 @@ export default function DashboardPage() {
           owner_id: userId,
         })
         .select()
-        .single()
+        .single();
 
-      if (listError) throw listError
+      if (listError) throw listError;
 
       const { error: memberError } = await supabase.from('list_members').insert({
         list_id: list.id,
         user_id: userId,
         role: 'owner',
-      })
+      });
 
-      if (memberError) throw memberError
+      if (memberError) throw memberError;
 
-      setNewListName('')
-      await loadLists()
-      await loadAllTasks()
-      setSelectedListId(list.id)
-      setScreen('list')
-      setMessage('List created')
+      setNewListName('');
+      await loadLists();
+      await loadAllTasks();
+      setSelectedListId(list.id);
+      setScreen('list');
+      setMessage('List created');
     } catch (e: any) {
-      setError(e.message || 'Failed to create list')
+      setError(e.message || 'Failed to create list');
     }
   }
 
   function startEditList(list: ListRow) {
-    setEditingListId(list.id)
-    setEditListName(list.name)
+    setEditingListId(list.id);
+    setEditListName(list.name);
   }
 
   function cancelEditList() {
-    setEditingListId(null)
-    setEditListName('')
+    setEditingListId(null);
+    setEditListName('');
   }
 
   async function saveEditList() {
     try {
-      if (!editingListId) return
+      if (!editingListId) return;
       if (!editListName.trim()) {
-        setError('List name is required.')
-        return
+        setError('List name is required.');
+        return;
       }
 
-      setError('')
-      setMessage('')
+      setError('');
+      setMessage('');
 
       const { error } = await supabase
         .from('lists')
         .update({ name: editListName.trim() })
-        .eq('id', editingListId)
+        .eq('id', editingListId);
 
-      if (error) throw error
+      if (error) throw error;
 
-      await loadLists()
-      cancelEditList()
-      setMessage('List updated')
+      await loadLists();
+      cancelEditList();
+      setMessage('List updated');
     } catch (e: any) {
-      setError(e.message || 'Failed to update list')
+      setError(e.message || 'Failed to update list');
     }
   }
 
   async function addTask() {
     try {
-      if (!userId) return
+      if (!userId) return;
       if (!newTaskTitle.trim()) {
-        setError('Title is required.')
-        return
+        setError('Title is required.');
+        return;
       }
       if (!newTaskListId) {
-        setError('Select a list.')
-        return
+        setError('Select a list.');
+        return;
       }
 
-      setError('')
-      setMessage('')
+      setError('');
+      setMessage('');
 
-      const dueDate = newTaskDateEnabled ? newTaskDueDate || null : null
-      const dueTime = newTaskDateEnabled && newTaskTimeEnabled ? newTaskDueTime || null : null
-      const reminderValue = dueDate ? Number(newTaskReminder) : null
+      const dueDate = newTaskDateEnabled ? newTaskDueDate || null : null;
+      const dueTime = newTaskDateEnabled && newTaskTimeEnabled ? newTaskDueTime || null : null;
+      const reminderValue = dueDate ? Number(newTaskReminder) : null;
 
       const payload = {
         title: newTaskTitle.trim(),
@@ -421,84 +449,84 @@ export default function DashboardPage() {
         due_time: dueTime,
         priority: newTaskPriority || 'medium',
         reminder_minutes: reminderValue,
-      }
+      };
 
-      const { error } = await supabase.from('tasks').insert(payload)
-      if (error) throw error
+      const { error } = await supabase.from('tasks').insert(payload);
+      if (error) throw error;
 
-      resetCreateForm()
-      setShowCreateModal(false)
-      await loadAllTasks()
-      setSelectedListId(newTaskListId)
-      setScreen('list')
-      setMessage('Task added')
+      resetCreateForm();
+      setShowCreateModal(false);
+      await loadAllTasks();
+      setSelectedListId(newTaskListId);
+      setScreen('list');
+      setMessage('Task added');
     } catch (e: any) {
-      setError(e.message || 'Failed to add task')
+      setError(e.message || 'Failed to add task');
     }
   }
 
   function resetCreateForm() {
-    setNewTaskTitle('')
-    setNewTaskNotes('')
-    setNewTaskDateEnabled(true)
-    setNewTaskTimeEnabled(false)
-    setNewTaskDueDate(todayYMD())
-    setNewTaskDueTime('')
-    setNewTaskPriority('medium')
-    setNewTaskReminder('60')
-    setNewTaskListId(selectedListId || lists[0]?.id || '')
+    setNewTaskTitle('');
+    setNewTaskNotes('');
+    setNewTaskDateEnabled(true);
+    setNewTaskTimeEnabled(false);
+    setNewTaskDueDate(todayYMD());
+    setNewTaskDueTime('');
+    setNewTaskPriority('medium');
+    setNewTaskReminder('60');
+    setNewTaskListId(selectedListId || lists[0]?.id || '');
   }
 
   async function toggleTask(task: TaskRow) {
     try {
-      const nextComplete = !task.is_complete
+      const nextComplete = !task.is_complete;
       const { error } = await supabase
         .from('tasks')
         .update({ is_complete: nextComplete })
-        .eq('id', task.id)
+        .eq('id', task.id);
 
-      if (error) throw error
+      if (error) throw error;
 
-      if (expandedTaskId === task.id) setExpandedTaskId(null)
-      if (editingTaskId === task.id) cancelEdit()
+      if (expandedTaskId === task.id) setExpandedTaskId(null);
+      if (editingTaskId === task.id) cancelEdit();
 
-      await loadAllTasks()
-      setMessage(nextComplete ? 'Task completed' : 'Task reopened')
+      await loadAllTasks();
+      setMessage(nextComplete ? 'Task completed' : 'Task reopened');
     } catch (e: any) {
-      setError(e.message || 'Failed to update task')
+      setError(e.message || 'Failed to update task');
     }
   }
 
   function startEdit(task: TaskRow) {
-    setEditingTaskId(task.id)
-    setExpandedTaskId(task.id)
-    setEditTitle(task.title)
-    setEditNotes(task.notes || '')
-    setEditDateEnabled(!!task.due_date)
-    setEditTimeEnabled(!!task.due_time)
-    setEditDueDate(task.due_date || todayYMD())
-    setEditDueTime(task.due_time || '')
-    setEditPriority(task.priority || 'medium')
-    setEditReminder(task.reminder_minutes == null ? '60' : String(task.reminder_minutes))
+    setEditingTaskId(task.id);
+    setExpandedTaskId(task.id);
+    setEditTitle(task.title);
+    setEditNotes(task.notes || '');
+    setEditDateEnabled(!!task.due_date);
+    setEditTimeEnabled(!!task.due_time);
+    setEditDueDate(task.due_date || todayYMD());
+    setEditDueTime(task.due_time || '');
+    setEditPriority(task.priority || 'medium');
+    setEditReminder(task.reminder_minutes == null ? '60' : String(task.reminder_minutes));
   }
 
   function cancelEdit() {
-    setEditingTaskId(null)
-    setEditTitle('')
-    setEditNotes('')
-    setEditDateEnabled(true)
-    setEditTimeEnabled(false)
-    setEditDueDate(todayYMD())
-    setEditDueTime('')
-    setEditPriority('medium')
-    setEditReminder('60')
+    setEditingTaskId(null);
+    setEditTitle('');
+    setEditNotes('');
+    setEditDateEnabled(true);
+    setEditTimeEnabled(false);
+    setEditDueDate(todayYMD());
+    setEditDueTime('');
+    setEditPriority('medium');
+    setEditReminder('60');
   }
 
   async function saveEdit(taskId: string) {
     try {
-      const dueDate = editDateEnabled ? editDueDate || null : null
-      const dueTime = editDateEnabled && editTimeEnabled ? editDueTime || null : null
-      const reminderValue = dueDate ? Number(editReminder) : null
+      const dueDate = editDateEnabled ? editDueDate || null : null;
+      const dueTime = editDateEnabled && editTimeEnabled ? editDueTime || null : null;
+      const reminderValue = dueDate ? Number(editReminder) : null;
 
       const { error } = await supabase
         .from('tasks')
@@ -510,215 +538,215 @@ export default function DashboardPage() {
           priority: editPriority || 'medium',
           reminder_minutes: reminderValue,
         })
-        .eq('id', taskId)
+        .eq('id', taskId);
 
-      if (error) throw error
+      if (error) throw error;
 
-      cancelEdit()
-      await loadAllTasks()
-      setMessage('Task updated')
+      cancelEdit();
+      await loadAllTasks();
+      setMessage('Task updated');
     } catch (e: any) {
-      setError(e.message || 'Failed to save task')
+      setError(e.message || 'Failed to save task');
     }
   }
 
   async function deleteTask(taskId: string) {
     try {
-      const { error } = await supabase.from('tasks').delete().eq('id', taskId)
-      if (error) throw error
+      const { error } = await supabase.from('tasks').delete().eq('id', taskId);
+      if (error) throw error;
 
-      if (expandedTaskId === taskId) setExpandedTaskId(null)
-      if (editingTaskId === taskId) cancelEdit()
+      if (expandedTaskId === taskId) setExpandedTaskId(null);
+      if (editingTaskId === taskId) cancelEdit();
 
-      await loadAllTasks()
-      setMessage('Task deleted')
+      await loadAllTasks();
+      setMessage('Task deleted');
     } catch (e: any) {
-      setError(e.message || 'Failed to delete task')
+      setError(e.message || 'Failed to delete task');
     }
   }
 
   async function inviteMember() {
     try {
-      if (!selectedListId) return
-      if (!inviteEmail.trim()) return
+      if (!selectedListId) return;
+      if (!inviteEmail.trim()) return;
 
-      setError('')
-      setMessage('')
+      setError('');
+      setMessage('');
 
-      const normalized = inviteEmail.trim().toLowerCase()
+      const normalized = inviteEmail.trim().toLowerCase();
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id, email')
         .eq('email', normalized)
-        .single()
+        .single();
 
       if (profileError || !profile) {
-        throw new Error('That user must sign in once before you can invite them.')
+        throw new Error('That user must sign in once before you can invite them.');
       }
 
       const { error: insertError } = await supabase.from('list_members').insert({
         list_id: selectedListId,
         user_id: profile.id,
         role: 'editor',
-      })
+      });
 
       if (insertError) {
         if (insertError.message.toLowerCase().includes('duplicate')) {
-          throw new Error('That user is already in this list.')
+          throw new Error('That user is already in this list.');
         }
-        throw insertError
+        throw insertError;
       }
 
-      setInviteEmail('')
-      await loadMembers(selectedListId)
-      await loadLists()
-      setMessage(`Invited ${normalized}`)
+      setInviteEmail('');
+      await loadMembers(selectedListId);
+      await loadLists();
+      setMessage(`Invited ${normalized}`);
     } catch (e: any) {
-      setError(e.message || 'Failed to invite member')
+      setError(e.message || 'Failed to invite member');
     }
   }
 
   async function removeMember(member: MemberRow) {
     try {
-      const currentList = lists.find((l) => l.id === selectedListId)
-      if (!currentList) return
+      const currentList = lists.find((l) => l.id === selectedListId);
+      if (!currentList) return;
 
       if (member.user_id === currentList.owner_id) {
-        setError('You cannot remove the owner.')
-        return
+        setError('You cannot remove the owner.');
+        return;
       }
 
       const { error } = await supabase
         .from('list_members')
         .delete()
-        .eq('id', member.id)
+        .eq('id', member.id);
 
-      if (error) throw error
+      if (error) throw error;
 
-      await loadMembers(selectedListId)
-      setMessage('Member removed')
+      await loadMembers(selectedListId);
+      setMessage('Member removed');
     } catch (e: any) {
-      setError(e.message || 'Failed to remove member')
+      setError(e.message || 'Failed to remove member');
     }
   }
 
   async function leaveCurrentList() {
     try {
-      if (!userId || !selectedListId) return
-      const currentList = lists.find((l) => l.id === selectedListId)
-      if (!currentList) return
+      if (!userId || !selectedListId) return;
+      const currentList = lists.find((l) => l.id === selectedListId);
+      if (!currentList) return;
       if (currentList.owner_id === userId) {
-        setError('Owners cannot leave their own list. Delete it instead.')
-        return
+        setError('Owners cannot leave their own list. Delete it instead.');
+        return;
       }
 
-      setError('')
-      setMessage('')
+      setError('');
+      setMessage('');
 
       const { error } = await supabase
         .from('list_members')
         .delete()
         .eq('list_id', selectedListId)
-        .eq('user_id', userId)
+        .eq('user_id', userId);
 
-      if (error) throw error
+      if (error) throw error;
 
-      await loadLists()
-      await loadAllTasks()
-      setScreen('home')
-      setMessage('You left the list')
+      await loadLists();
+      await loadAllTasks();
+      setScreen('home');
+      setMessage('You left the list');
     } catch (e: any) {
-      setError(e.message || 'Failed to leave list')
+      setError(e.message || 'Failed to leave list');
     }
   }
 
   async function deleteCurrentList() {
     try {
-      if (!selectedListId || !userId) return
-      const currentList = lists.find((l) => l.id === selectedListId)
-      if (!currentList) return
+      if (!selectedListId || !userId) return;
+      const currentList = lists.find((l) => l.id === selectedListId);
+      if (!currentList) return;
       if (currentList.owner_id !== userId) {
-        setError('Only the owner can delete this list.')
-        return
+        setError('Only the owner can delete this list.');
+        return;
       }
 
       const ok = window.confirm(
         `Delete list "${currentList.name}"? This will remove its tasks and memberships.`
-      )
-      if (!ok) return
+      );
+      if (!ok) return;
 
-      setDeletingList(true)
-      setError('')
-      setMessage('')
+      setDeletingList(true);
+      setError('');
+      setMessage('');
 
       const { error } = await supabase
         .from('lists')
         .delete()
-        .eq('id', selectedListId)
+        .eq('id', selectedListId);
 
-      if (error) throw error
+      if (error) throw error;
 
-      setExpandedTaskId(null)
-      setEditingTaskId(null)
-      cancelEditList()
-      await loadLists()
-      await loadAllTasks()
-      setScreen('home')
-      setMessage('List deleted')
+      setExpandedTaskId(null);
+      setEditingTaskId(null);
+      cancelEditList();
+      await loadLists();
+      await loadAllTasks();
+      setScreen('home');
+      setMessage('List deleted');
     } catch (e: any) {
-      setError(e.message || 'Failed to delete list')
+      setError(e.message || 'Failed to delete list');
     } finally {
-      setDeletingList(false)
+      setDeletingList(false);
     }
   }
 
   async function signOut() {
-    await supabase.auth.signOut()
-    window.location.href = '/'
+    await supabase.auth.signOut();
+    window.location.href = '/';
   }
 
   function openCreateModal(defaultListId?: string) {
-    setNewTaskListId(defaultListId || selectedListId || lists[0]?.id || '')
-    setShowCreateModal(true)
+    setNewTaskListId(defaultListId || selectedListId || lists[0]?.id || '');
+    setShowCreateModal(true);
   }
 
   function toggleExpanded(taskId: string) {
-    setExpandedTaskId((current) => (current === taskId ? null : taskId))
+    setExpandedTaskId((current) => (current === taskId ? null : taskId));
   }
 
   function goBackHome() {
-    setScreen('home')
-    setExpandedTaskId(null)
-    setEditingTaskId(null)
-    cancelEditList()
+    setScreen('home');
+    setExpandedTaskId(null);
+    setEditingTaskId(null);
+    cancelEditList();
   }
 
   const selectedList = useMemo(
     () => lists.find((l) => l.id === selectedListId) || null,
     [lists, selectedListId]
-  )
+  );
 
   const currentUserMembership = useMemo(
     () => members.find((m) => m.user_id === userId) || null,
     [members, userId]
-  )
+  );
 
-  const activeTasks = useMemo(() => tasks.filter((t) => !t.is_complete), [tasks])
-  const completedTasks = useMemo(() => tasks.filter((t) => t.is_complete), [tasks])
+  const activeTasks = useMemo(() => tasks.filter((t) => !t.is_complete), [tasks]);
+  const completedTasks = useMemo(() => tasks.filter((t) => t.is_complete), [tasks]);
   const todayTasks = useMemo(
     () => activeTasks.filter((t) => t.due_date === todayYMD()),
     [activeTasks]
-  )
+  );
 
   const listCounts = useMemo(() => {
-    const map: Record<string, number> = {}
+    const map: Record<string, number> = {};
     for (const t of activeTasks) {
-      if (!t.list_id) continue
-      map[t.list_id] = (map[t.list_id] || 0) + 1
+      if (!t.list_id) continue;
+      map[t.list_id] = (map[t.list_id] || 0) + 1;
     }
-    return map
-  }, [activeTasks])
+    return map;
+  }, [activeTasks]);
 
   const tasksByList = useMemo(() => {
     const source =
@@ -726,21 +754,21 @@ export default function DashboardPage() {
         ? todayTasks
         : screen === 'completed'
         ? completedTasks
-        : activeTasks
+        : activeTasks;
 
-    const grouped: Array<{ list: ListRow; tasks: TaskRow[] }> = []
+    const grouped: Array<{ list: ListRow; tasks: TaskRow[] }> = [];
 
     for (const list of lists) {
-      const listTasks = source.filter((t) => t.list_id === list.id)
+      const listTasks = source.filter((t) => t.list_id === list.id);
       if (screen === 'all' || screen === 'today' || screen === 'completed') {
-        if (listTasks.length) grouped.push({ list, tasks: listTasks })
+        if (listTasks.length) grouped.push({ list, tasks: listTasks });
       } else if (screen === 'list' && selectedListId === list.id) {
-        grouped.push({ list, tasks: listTasks })
+        grouped.push({ list, tasks: listTasks });
       }
     }
 
-    return grouped
-  }, [screen, todayTasks, completedTasks, activeTasks, lists, selectedListId])
+    return grouped;
+  }, [screen, todayTasks, completedTasks, activeTasks, lists, selectedListId]);
 
   const homeListRows = useMemo(
     () =>
@@ -749,16 +777,16 @@ export default function DashboardPage() {
         count: listCounts[list.id] || 0,
       })),
     [lists, listCounts]
-  )
+  );
 
-  const isOwner = !!selectedList && selectedList.owner_id === userId
+  const isOwner = !!selectedList && selectedList.owner_id === userId;
 
   if (loading) {
     return (
       <main style={styles.page}>
         <div style={styles.loadingWrap}>Loading...</div>
       </main>
-    )
+    );
   }
 
   return (
@@ -795,7 +823,10 @@ export default function DashboardPage() {
                 <div style={styles.statLabel}>All</div>
               </button>
 
-              <button style={{ ...styles.statCard, ...styles.completedCard }} onClick={() => setScreen('completed')}>
+              <button
+                style={{ ...styles.statCard, ...styles.completedCard }}
+                onClick={() => setScreen('completed')}
+              >
                 <div style={styles.statCount}>{completedTasks.length}</div>
                 <div style={styles.statLabel}>Completed</div>
               </button>
@@ -827,8 +858,8 @@ export default function DashboardPage() {
                       key={list.id}
                       style={styles.listRow}
                       onClick={() => {
-                        setSelectedListId(list.id)
-                        setScreen('list')
+                        setSelectedListId(list.id);
+                        setScreen('list');
                       }}
                     >
                       <div>
@@ -865,10 +896,10 @@ export default function DashboardPage() {
                   {screen === 'list' && selectedList
                     ? selectedList.name
                     : screen === 'today'
-                    ? 'Today'
-                    : screen === 'all'
-                    ? 'All'
-                    : 'Completed'}
+                      ? 'Today'
+                      : screen === 'all'
+                        ? 'All'
+                        : 'Completed'}
                 </div>
               </div>
 
@@ -963,9 +994,9 @@ export default function DashboardPage() {
                     </div>
 
                     {groupTasks.map((task) => {
-                      const isExpanded = expandedTaskId === task.id
-                      const isEditing = editingTaskId === task.id
-                      const overdue = isOverdue(task)
+                      const isExpanded = expandedTaskId === task.id;
+                      const isEditing = editingTaskId === task.id;
+                      const overdue = isOverdue(task);
 
                       return (
                         <div key={task.id} style={styles.taskRowWrap}>
@@ -976,8 +1007,8 @@ export default function DashboardPage() {
                             <button
                               type="button"
                               onClick={(e) => {
-                                e.stopPropagation()
-                                toggleTask(task)
+                                e.stopPropagation();
+                                toggleTask(task);
                               }}
                               style={{
                                 ...styles.circleButton,
@@ -999,7 +1030,7 @@ export default function DashboardPage() {
 
                               {task.notes ? <div style={styles.taskNotes}>{task.notes}</div> : null}
 
-                              {(task.due_date || task.reminder_minutes != null) ? (
+                              {task.due_date || task.reminder_minutes != null ? (
                                 <div
                                   style={{
                                     ...styles.taskMeta,
@@ -1181,7 +1212,7 @@ export default function DashboardPage() {
                             </div>
                           ) : null}
                         </div>
-                      )
+                      );
                     })}
                   </div>
                 ))
@@ -1417,7 +1448,7 @@ export default function DashboardPage() {
         ) : null}
       </div>
     </main>
-  )
+  );
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -2053,4 +2084,4 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#9ca3af',
     padding: '8px 0',
   },
-}
+};
