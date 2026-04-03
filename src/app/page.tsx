@@ -8,21 +8,38 @@ export default function Home() {
   const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
-    checkSession();
-  }, []);
+    let mounted = true;
 
-  async function checkSession() {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    async function init() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-    if (session) {
-      window.location.href = '/dashboard';
-      return;
+      if (!mounted) return;
+
+      if (session) {
+        window.location.href = '/dashboard';
+        return;
+      }
+
+      setCheckingSession(false);
     }
 
-    setCheckingSession(false);
-  }
+    init();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session) {
+        window.location.href = '/dashboard';
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   async function signIn() {
     setLoading(true);
@@ -30,7 +47,7 @@ export default function Home() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`, // ✅ FIXED
+        redirectTo: `${window.location.origin}`,
       },
     });
 
