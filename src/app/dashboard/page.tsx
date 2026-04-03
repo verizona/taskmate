@@ -392,28 +392,29 @@ export default function DashboardPage() {
 }
 
   async function loadMembers(listId: string) {
-    const { data, error } = await supabase
-      .from('list_members')
-      .select(`
-        id,
-        created_at,
-        list_id,
-        user_id,
-        role,
-        profiles (
-          email
-        )
-      `)
-      .eq('list_id', listId)
-      .order('created_at', { ascending: true });
+  const { data, error } = await supabase
+    .from('list_members')
+    .select(`
+      id,
+      created_at,
+      list_id,
+      user_id,
+      role,
+      profiles (
+        email
+      )
+    `)
+    .eq('list_id', listId)
+    .order('created_at', { ascending: true });
 
-    if (error) {
-      setError(error.message);
-      return;
-    }
-
-    setMembers((data as MemberRow[]) || []);
+  if (error) {
+    setError(error.message);
+    return;
   }
+
+  const rows: MemberRow[] = Array.isArray(data) ? (data as unknown as MemberRow[]) : [];
+  setMembers(rows);
+}
 
   async function createList() {
     try {
