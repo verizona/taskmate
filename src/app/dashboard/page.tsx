@@ -2,215 +2,342 @@
 
 import Image from 'next/image'
 import Link from 'next/link'
+import { useMemo, useState } from 'react'
+
+type TabType = 'my-tasks' | 'in-progress' | 'completed'
+
+type Task = {
+  id: number
+  title: string
+  subtitle: string
+  completed: boolean
+  inProgress: boolean
+}
 
 export default function DashboardPage() {
-  const stats = [
-    { label: 'Today', value: '12', sub: 'Tasks scheduled' },
-    { label: 'All', value: '48', sub: 'Across all lists' },
-    { label: 'Completed', value: '31', sub: 'Finished this week' },
-  ]
+  const [tab, setTab] = useState<TabType>('my-tasks')
+  const [search, setSearch] = useState('')
 
-  const lists = [
-    { name: 'Work', count: 8, badge: 'Active' },
-    { name: 'Personal', count: 5, badge: 'Today' },
-    { name: 'Shopping', count: 3, badge: 'Pending' },
-    { name: 'Ideas', count: 7, badge: 'New' },
-  ]
+  const [tasks, setTasks] = useState<Task[]>([
+    {
+      id: 1,
+      title: 'Finish project presentation',
+      subtitle: 'Work',
+      completed: false,
+      inProgress: true,
+    },
+    {
+      id: 2,
+      title: 'Grocery shopping',
+      subtitle: 'Shopping',
+      completed: false,
+      inProgress: false,
+    },
+    {
+      id: 3,
+      title: 'Dentist appointment',
+      subtitle: 'Reminder',
+      completed: false,
+      inProgress: false,
+    },
+    {
+      id: 4,
+      title: 'Review shared list invites',
+      subtitle: 'Work',
+      completed: true,
+      inProgress: false,
+    },
+  ])
 
-  const tasks = [
-    { title: 'Finish project presentation', time: 'Today · 12:00 PM' },
-    { title: 'Review shared list invites', time: 'Tomorrow · 9:00 AM' },
-    { title: 'Plan weekend errands', time: 'Friday · 5:30 PM' },
-    { title: 'Update app branding', time: 'Saturday · 11:00 AM' },
-  ]
+  function toggleTask(id: number) {
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === id ? { ...task, completed: !task.completed } : task
+      )
+    )
+  }
+
+  function filteredTasks() {
+    let result = tasks
+
+    if (tab === 'my-tasks') {
+      result = tasks.filter((t) => !t.completed)
+    } else if (tab === 'in-progress') {
+      result = tasks.filter((t) => t.inProgress && !t.completed)
+    } else if (tab === 'completed') {
+      result = tasks.filter((t) => t.completed)
+    }
+
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      result = result.filter(
+        (t) =>
+          t.title.toLowerCase().includes(q) ||
+          t.subtitle.toLowerCase().includes(q)
+      )
+    }
+
+    return result
+  }
+
+  const visibleTasks = useMemo(
+    () => filteredTasks(),
+    [tasks, tab, search]
+  )
+
+  const counts = {
+    myTasks: tasks.filter((t) => !t.completed).length,
+    inProgress: tasks.filter((t) => t.inProgress && !t.completed).length,
+    completed: tasks.filter((t) => t.completed).length,
+  }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.08),transparent_28%),radial-gradient(circle_at_top_right,rgba(34,197,94,0.08),transparent_26%)] dark:bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.12),transparent_28%),radial-gradient(circle_at_top_right,rgba(34,197,94,0.12),transparent_26%),linear-gradient(to_bottom,#020617,#000000)]">
-      <div className="mx-auto max-w-7xl px-4 pb-10 pt-5 sm:px-6 lg:px-8">
-        <header className="sticky top-0 z-40 mb-6">
-          <div className="rounded-[28px] border border-white/50 bg-white/70 px-4 py-3 shadow-[0_10px_40px_rgba(15,23,42,0.08)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/5 dark:shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
-            <div className="flex items-center justify-between gap-4">
+    <main className="min-h-screen bg-[#f5f5f7] px-4 py-6 text-slate-900 dark:bg-[#090b10] dark:text-white">
+      <div className="mx-auto w-full max-w-md">
+        <div className="overflow-hidden rounded-[34px] border border-black/5 bg-white shadow-[0_10px_40px_rgba(0,0,0,0.08)] dark:border-white/10 dark:bg-[#0f1117]">
+          <div className="px-5 pt-5 pb-4">
+            <div className="mb-5 flex items-center justify-between">
               <Link
                 href="/dashboard"
-                className="group flex items-center gap-3 rounded-2xl px-2 py-1 transition hover:bg-slate-100/80 dark:hover:bg-white/5"
+                className="inline-flex items-center transition hover:opacity-90"
               >
-                <div className="relative">
-                  <div className="absolute inset-0 rounded-2xl bg-sky-400/20 blur-xl transition duration-300 group-hover:bg-emerald-400/20" />
-                  <Image
-                    src="/logo/logo-light.png"
-                    alt="TaskMate"
-                    width={176}
-                    height={44}
-                    className="relative block dark:hidden transition duration-300 group-hover:scale-[1.02]"
-                    priority
-                  />
-                  <Image
-                    src="/logo/logo-dark.png"
-                    alt="TaskMate"
-                    width={176}
-                    height={44}
-                    className="relative hidden dark:block transition duration-300 group-hover:scale-[1.02]"
-                    priority
-                  />
-                </div>
+                <Image
+                  src="/logo/logo-light.png"
+                  alt="TaskMate"
+                  width={150}
+                  height={40}
+                  className="block dark:hidden"
+                  priority
+                />
+                <Image
+                  src="/logo/logo-dark.png"
+                  alt="TaskMate"
+                  width={150}
+                  height={40}
+                  className="hidden dark:block"
+                  priority
+                />
               </Link>
 
-              <div className="hidden items-center gap-3 md:flex">
-                <button className="rounded-full border border-slate-200/80 bg-white/80 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:shadow-md dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
-                  Today
-                </button>
-                <button className="rounded-full border border-transparent bg-gradient-to-r from-sky-500 to-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(34,197,94,0.28)] transition hover:scale-[1.02]">
-                  + New Task
-                </button>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <section className="mb-6">
-          <div className="grid gap-4 lg:grid-cols-[1.35fr_0.65fr]">
-            <div className="overflow-hidden rounded-[32px] border border-white/60 bg-white/75 p-6 shadow-[0_14px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/5 dark:shadow-[0_14px_50px_rgba(0,0,0,0.35)]">
-              <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium tracking-wide text-slate-500 dark:text-slate-400">
-                    Good day
-                  </p>
-                  <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
-                    Your tasks, beautifully organized.
-                  </h1>
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                    TaskMate keeps your day focused with lists, reminders, and shared tasks in one clean space.
-                  </p>
-                </div>
-
-                <div className="flex justify-center sm:justify-end">
-                  <div className="group relative">
-                    <div className="absolute inset-0 rounded-[28px] bg-gradient-to-br from-sky-400/25 to-emerald-400/25 blur-2xl transition duration-500 group-hover:from-sky-400/35 group-hover:to-emerald-400/35" />
-                    <div className="relative rounded-[28px] border border-white/60 bg-white/80 p-4 shadow-xl backdrop-blur dark:border-white/10 dark:bg-white/5">
-                      <Image
-                        src="/logo/icon.png"
-                        alt="TaskMate icon"
-                        width={88}
-                        height={88}
-                        priority
-                        className="transition duration-500 group-hover:scale-105 group-hover:-rotate-2 motion-safe:animate-[float_4.2s_ease-in-out_infinite]"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <button
+                type="button"
+                className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
+                aria-label="Search"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-6 w-6"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="m21 21-4.35-4.35m1.85-5.15a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"
+                  />
+                </svg>
+              </button>
             </div>
 
-            <div className="rounded-[32px] border border-white/60 bg-white/75 p-6 shadow-[0_14px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/5 dark:shadow-[0_14px_50px_rgba(0,0,0,0.35)]">
-              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Quick Focus</p>
-              <div className="mt-4 space-y-3">
-                <div className="rounded-2xl bg-slate-50/90 p-4 dark:bg-white/5">
-                  <p className="text-sm text-slate-500 dark:text-slate-400">Next task</p>
-                  <p className="mt-1 font-semibold">Finish project presentation</p>
-                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">12:00 PM</p>
-                </div>
-                <div className="rounded-2xl bg-slate-50/90 p-4 dark:bg-white/5">
-                  <p className="text-sm text-slate-500 dark:text-slate-400">Shared lists</p>
-                  <p className="mt-1 font-semibold">3 active collaborators</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+            <div className="mb-5 flex items-center gap-3 rounded-2xl bg-[#f2f3f7] px-4 py-3 dark:bg-white/8">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-5 w-5 text-slate-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m21 21-4.35-4.35m1.85-5.15a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"
+                />
+              </svg>
 
-        <section className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
-          {stats.map((item) => (
-            <div
-              key={item.label}
-              className="rounded-[28px] border border-white/60 bg-white/75 p-5 shadow-[0_10px_35px_rgba(15,23,42,0.07)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/5 dark:shadow-[0_10px_35px_rgba(0,0,0,0.3)]"
-            >
-              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{item.label}</p>
-              <h2 className="mt-2 text-3xl font-bold tracking-tight">{item.value}</h2>
-              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{item.sub}</p>
-            </div>
-          ))}
-        </section>
+              <input
+                type="text"
+                placeholder="Search Tasks"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
+              />
 
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-          <div className="rounded-[32px] border border-white/60 bg-white/75 p-6 shadow-[0_14px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/5 dark:shadow-[0_14px_50px_rgba(0,0,0,0.35)]">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold tracking-tight">My Lists</h3>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 dark:bg-white/10 dark:text-slate-300">
-                {lists.length} lists
-              </span>
+              <button
+                type="button"
+                className="text-slate-400 transition hover:text-slate-600 dark:hover:text-slate-200"
+                aria-label="Voice search"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 18v3m0 0h3m-3 0H9m3-3a4 4 0 0 0 4-4V8a4 4 0 1 0-8 0v6a4 4 0 0 0 4 4Z"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            <div className="mb-5 flex items-center justify-between border-b border-slate-200 dark:border-white/10">
+              <TabButton
+                label="My Tasks"
+                active={tab === 'my-tasks'}
+                onClick={() => setTab('my-tasks')}
+              />
+              <TabButton
+                label="In Progress"
+                active={tab === 'in-progress'}
+                onClick={() => setTab('in-progress')}
+              />
+              <TabButton
+                label="Completed"
+                active={tab === 'completed'}
+                onClick={() => setTab('completed')}
+              />
+            </div>
+
+            <div className="mb-4 grid grid-cols-3 gap-2 text-center">
+              <MiniStat label="My" value={counts.myTasks} />
+              <MiniStat label="Doing" value={counts.inProgress} />
+              <MiniStat label="Done" value={counts.completed} />
             </div>
 
             <div className="space-y-3">
-              {lists.map((list) => (
-                <div
-                  key={list.name}
-                  className="flex items-center justify-between rounded-[22px] border border-slate-200/70 bg-white/80 px-4 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-white/10 dark:bg-white/5"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="h-11 w-11 rounded-2xl bg-gradient-to-br from-sky-500 to-emerald-500 p-[1px]">
-                      <div className="flex h-full w-full items-center justify-center rounded-2xl bg-white dark:bg-slate-950">
-                        <Image src="/logo/icon.png" alt="" width={22} height={22} />
-                      </div>
-                    </div>
-                    <div>
-                      <p className="font-semibold">{list.name}</p>
-                      <p className="text-sm text-slate-500 dark:text-slate-400">{list.count} tasks</p>
-                    </div>
-                  </div>
-
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-white/10 dark:text-slate-300">
-                    {list.badge}
-                  </span>
+              {visibleTasks.length === 0 ? (
+                <div className="rounded-2xl bg-[#f2f3f7] px-4 py-8 text-center text-sm text-slate-500 dark:bg-white/8 dark:text-slate-300">
+                  No tasks found.
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-[32px] border border-white/60 bg-white/75 p-6 shadow-[0_14px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/5 dark:shadow-[0_14px_50px_rgba(0,0,0,0.35)]">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold tracking-tight">Upcoming Tasks</h3>
-              <span className="rounded-full bg-gradient-to-r from-sky-500/15 to-emerald-500/15 px-3 py-1 text-xs font-medium text-slate-700 dark:text-slate-200">
-                Priority View
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              {tasks.map((task, index) => (
-                <div
-                  key={task.title}
-                  className="group rounded-[24px] border border-slate-200/70 bg-white/85 p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-white/10 dark:bg-white/5"
-                >
-                  <div className="flex items-start gap-4">
+              ) : (
+                visibleTasks.map((task) => (
+                  <div
+                    key={task.id}
+                    className="flex items-center gap-3 rounded-2xl border border-black/5 bg-white px-4 py-4 shadow-sm transition hover:shadow-md dark:border-white/10 dark:bg-white/5"
+                  >
                     <button
-                      aria-label={`Mark ${task.title} complete`}
-                      className="mt-0.5 h-6 w-6 rounded-full border-2 border-slate-300 transition group-hover:border-emerald-500 dark:border-slate-600"
-                    />
-                    <div className="flex-1">
-                      <p className="font-semibold">{task.title}</p>
-                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{task.time}</p>
+                      type="button"
+                      onClick={() => toggleTask(task.id)}
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition ${
+                        task.completed
+                          ? 'border-green-500 bg-green-500 text-white'
+                          : 'border-slate-300 bg-transparent hover:border-sky-500 dark:border-slate-500'
+                      }`}
+                      aria-label={
+                        task.completed ? 'Mark as incomplete' : 'Mark as complete'
+                      }
+                    >
+                      {task.completed ? (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-4 w-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="m5 13 4 4L19 7"
+                          />
+                        </svg>
+                      ) : null}
+                    </button>
+
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={`truncate text-[15px] font-semibold ${
+                          task.completed
+                            ? 'text-slate-400 line-through dark:text-slate-500'
+                            : ''
+                        }`}
+                      >
+                        {task.title}
+                      </p>
+                      <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+                        {task.subtitle}
+                      </p>
                     </div>
-                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 dark:bg-white/10 dark:text-slate-300">
-                      #{index + 1}
+
+                    <div className="shrink-0">
+                      {task.completed ? (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-green-500 text-white shadow-sm">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="m5 13 4 4L19 7"
+                            />
+                          </svg>
+                        </div>
+                      ) : (
+                        <div className="h-7 w-7 rounded-full bg-slate-100 dark:bg-white/10" />
+                      )}
                     </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
-        </section>
+        </div>
       </div>
-
-      <style jsx global>{`
-        @keyframes float {
-          0%,
-          100% {
-            transform: translateY(0px);
-          }
-          50% {
-            transform: translateY(-6px);
-          }
-        }
-      `}</style>
     </main>
+  )
+}
+
+function TabButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative px-1 pb-3 text-[15px] font-medium transition ${
+        active
+          ? 'text-slate-900 dark:text-white'
+          : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+      }`}
+    >
+      {label}
+      {active ? (
+        <span className="absolute bottom-0 left-0 h-[3px] w-full rounded-full bg-sky-500" />
+      ) : null}
+    </button>
+  )
+}
+
+function MiniStat({
+  label,
+  value,
+}: {
+  label: string
+  value: number
+}) {
+  return (
+    <div className="rounded-2xl bg-[#f2f3f7] px-3 py-3 dark:bg-white/8">
+      <p className="text-xs text-slate-500 dark:text-slate-400">{label}</p>
+      <p className="mt-1 text-lg font-semibold">{value}</p>
+    </div>
   )
 }
