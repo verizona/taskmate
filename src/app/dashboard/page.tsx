@@ -317,46 +317,48 @@ export default function DashboardPage() {
   }
 
   async function loadLists(uid?: string) {
-    const actualUserId = uid || userId;
-    if (!actualUserId) return;
+  const actualUserId = uid || userId;
+  if (!actualUserId) return;
 
-    const { data: memberships, error: membershipError } = await supabase
-      .from('list_members')
-      .select(`
-        list_id,
-        role,
-        lists (
-          id,
-          name,
-          owner_id,
-          created_at
-        )
-      `)
-      .eq('user_id', actualUserId);
+  const { data: memberships, error: membershipError } = await supabase
+    .from('list_members')
+    .select(`
+      list_id,
+      role,
+      lists (
+        id,
+        name,
+        owner_id,
+        created_at
+      )
+    `)
+    .eq('user_id', actualUserId);
 
-    if (membershipError) throw membershipError;
+  if (membershipError) throw membershipError;
 
-    const loadedLists: ListRow[] = (memberships || [])
-  .map((m: any) => m.lists)
-  .filter(Boolean)
-  .filter((list: ListRow, index: number, arr: ListRow[]) => arr.findIndex((x) => x.id === list.id) === index);
-    );
+  const rawLists = (memberships || [])
+    .map((m: any) => m.lists)
+    .filter(Boolean) as ListRow[];
 
-    loadedLists.sort((a, b) => {
-      const aTime = new Date(a.created_at).getTime();
-      const bTime = new Date(b.created_at).getTime();
-      return aTime - bTime;
-    });
+  const loadedLists = rawLists.filter(
+    (list, index, arr) => arr.findIndex((x) => x.id === list.id) === index
+  );
 
-    setLists(loadedLists);
+  loadedLists.sort((a, b) => {
+    const aTime = new Date(a.created_at).getTime();
+    const bTime = new Date(b.created_at).getTime();
+    return aTime - bTime;
+  });
 
-    setSelectedListId((current) => {
-      const stillExists = current && loadedLists.some((l) => l.id === current);
-      const nextId = stillExists ? current : loadedLists[0]?.id || '';
-      setNewTaskListId((prev) => prev || nextId);
-      return nextId;
-    });
-  }
+  setLists(loadedLists);
+
+  setSelectedListId((current) => {
+    const stillExists = current ? loadedLists.some((l) => l.id === current) : false;
+    const nextId = stillExists ? current : loadedLists[0]?.id || '';
+    setNewTaskListId((prev) => prev || nextId);
+    return nextId;
+  });
+}
 
   async function loadAllTasks(uid?: string) {
   const actualUserId = uid || userId;
