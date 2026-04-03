@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { supabase } from '@/lib/supabase';
 
 type ListRow = {
@@ -77,14 +78,21 @@ function formatTaskDate(dateString: string | null | undefined, timeString?: stri
   if (!dateString) return '';
   const date = new Date(`${dateString}T00:00:00`);
   if (Number.isNaN(date.getTime())) return dateString;
+
   const datePart = date.toLocaleDateString();
   if (!timeString) return datePart;
 
   const [hh, mm] = timeString.split(':');
   if (hh == null || mm == null) return datePart;
+
   const temp = new Date();
   temp.setHours(Number(hh), Number(mm), 0, 0);
-  const timePart = temp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+  const timePart = temp.toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
   return `${datePart}, ${timePart}`;
 }
 
@@ -97,6 +105,7 @@ function isOverdue(task: TaskRow) {
 
 export default function DashboardPage() {
   const isMobile = useIsMobile();
+  const bootstrappedRef = useRef(false);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string>('');
@@ -144,7 +153,89 @@ export default function DashboardPage() {
   const [deletingList, setDeletingList] = useState(false);
 
   useEffect(() => {
-    init();
+    let mounted = true;
+
+    const bootstrap = async () => {
+      if (bootstrappedRef.current) return;
+      bootstrappedRef.current = true;
+
+      try {
+        setLoading(true);
+        setError('');
+        setMessage('');
+
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError) throw userError;
+
+        if (!user) {
+          if (mounted) {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        await initializeDashboard(user.id, user.email ?? '', {
+          fullName:
+            (user.user_metadata?.full_name as string | undefined) ||
+            (user.user_metadata?.name as string | undefined) ||
+            '',
+          avatarUrl:
+            (user.user_metadata?.avatar_url as string | undefined) ||
+            (user.user_metadata?.picture as string | undefined) ||
+            '',
+        });
+      } catch (e: any) {
+        if (mounted) {
+          setError(e?.message || 'Failed to load dashboard');
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    bootstrap();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+
+      if (event === 'SIGNED_OUT') {
+        window.location.href = '/';
+        return;
+      }
+
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
+        try {
+          setLoading(true);
+          await initializeDashboard(session.user.id, session.user.email ?? '', {
+            fullName:
+              (session.user.user_metadata?.full_name as string | undefined) ||
+              (session.user.user_metadata?.name as string | undefined) ||
+              '',
+            avatarUrl:
+              (session.user.user_metadata?.avatar_url as string | undefined) ||
+              (session.user.user_metadata?.picture as string | undefined) ||
+              '',
+          });
+        } catch (e: any) {
+          setError(e?.message || 'Failed to refresh dashboard');
+        } finally {
+          setLoading(false);
+        }
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -155,71 +246,46 @@ export default function DashboardPage() {
     }
   }, [selectedListId]);
 
-  async function init() {
-    try {
-      setLoading(true);
-      setError('');
-      setMessage('');
+  async function initializeDashboard(
+    uid: string,
+    email: string,
+    meta?: { fullName?: string; avatarUrl?: string }
+  ) {
+    setUserId(uid);
+    setUserEmail(email);
 
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError) throw sessionError;
-      if (!session?.user) {
-        window.location.href = '/';
-        return;
-      }
-
-      const uid = session.user.id;
-      const email = session.user.email ?? '';
-
-      setUserId(uid);
-      setUserEmail(email);
-
-      await ensureProfile(uid, email);
-      await ensurePersonalList(uid);
-      await loadLists(uid);
-      await loadAllTasks(uid);
-    } catch (e: any) {
-      setError(e.message || 'Failed to load dashboard');
-    } finally {
-      setLoading(false);
-    }
+    await ensureProfile(uid, email, meta?.fullName || '', meta?.avatarUrl || '');
+    await ensurePersonalList(uid);
+    await loadLists(uid);
+    await loadAllTasks(uid);
   }
 
-  async function ensureProfile(uid: string, email: string) {
-    const { error } = await supabase
-      .from('profiles')
-      .upsert({ id: uid, email }, { onConflict: 'id' });
+  async function ensureProfile(uid: string, email: string, fullName = '', avatarUrl = '') {
+    const payload = {
+      id: uid,
+      email,
+      full_name: fullName || null,
+      avatar_url: avatarUrl || null,
+    };
 
+    const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
     if (error) throw error;
-
-    const { data, error: confirmError } = await supabase
-      .from('profiles')
-      .select('id, email')
-      .eq('id', uid)
-      .single();
-
-    if (confirmError) throw confirmError;
-    if (!data?.id) throw new Error('Profile was not created correctly');
   }
 
   async function ensurePersonalList(uid: string) {
-    const { data: existingMemberships, error: membershipError } = await supabase
-      .from('list_members')
-      .select('id, list_id')
-      .eq('user_id', uid)
+    const { data: ownedLists, error: ownedListsError } = await supabase
+      .from('lists')
+      .select('id, name')
+      .eq('owner_id', uid)
       .limit(1);
 
-    if (membershipError) throw membershipError;
-    if (existingMemberships && existingMemberships.length > 0) return;
+    if (ownedListsError) throw ownedListsError;
+    if (ownedLists && ownedLists.length > 0) return;
 
     const { data: insertedList, error: listError } = await supabase
       .from('lists')
       .insert({
-        name: 'My Tasks',
+        name: 'Personal',
         owner_id: uid,
       })
       .select('id, name, owner_id, created_at')
@@ -227,40 +293,27 @@ export default function DashboardPage() {
 
     if (listError) throw listError;
     if (!insertedList?.id) {
-      throw new Error('Failed to create personal list: missing list id');
+      throw new Error('Failed to create personal list');
     }
-
-    console.log('insertedList', insertedList);
-
-    const { data: confirmedList, error: confirmError } = await supabase
-      .from('lists')
-      .select('id')
-      .eq('id', insertedList.id)
-      .single();
-
-    if (confirmError) throw confirmError;
-    if (!confirmedList?.id) {
-      throw new Error('Created personal list could not be confirmed');
-    }
-
-    console.log('confirmedList', confirmedList);
-    console.log('uid', uid);
 
     const { error: memberError } = await supabase.from('list_members').insert({
-      list_id: confirmedList.id,
+      list_id: insertedList.id,
       user_id: uid,
       role: 'owner',
     });
 
     if (memberError) throw memberError;
 
+    // Best effort only. Do not break dashboard load if old orphan tasks exist and RLS blocks the update.
     const { error: backfillError } = await supabase
       .from('tasks')
-      .update({ list_id: confirmedList.id })
+      .update({ list_id: insertedList.id })
       .eq('user_id', uid)
       .is('list_id', null);
 
-    if (backfillError) throw backfillError;
+    if (backfillError) {
+      console.warn('Task backfill skipped:', backfillError.message);
+    }
   }
 
   async function loadLists(uid?: string) {
@@ -283,15 +336,23 @@ export default function DashboardPage() {
 
     if (membershipError) throw membershipError;
 
-    const loadedLists = (memberships || [])
+    const loadedLists = ((memberships || [])
       .map((m: any) => m.lists)
-      .filter(Boolean) as ListRow[];
+      .filter(Boolean) as ListRow[]).filter(
+      (list, index, arr) => arr.findIndex((x) => x.id === list.id) === index
+    );
+
+    loadedLists.sort((a, b) => {
+      const aTime = new Date(a.created_at).getTime();
+      const bTime = new Date(b.created_at).getTime();
+      return aTime - bTime;
+    });
 
     setLists(loadedLists);
 
     setSelectedListId((current) => {
-      const selected = current && loadedLists.some((l) => l.id === current);
-      const nextId = selected ? current : loadedLists[0]?.id || '';
+      const stillExists = current && loadedLists.some((l) => l.id === current);
+      const nextId = stillExists ? current : loadedLists[0]?.id || '';
       setNewTaskListId((prev) => prev || nextId);
       return nextId;
     });
@@ -316,21 +377,27 @@ export default function DashboardPage() {
 
     const { data, error } = await supabase
       .from('tasks')
-      .select('*')
+      .select(
+        'id, title, is_complete, user_id, list_id, due_date, due_time, priority, reminder_minutes, notes, created_at'
+      )
       .in('list_id', ids)
       .order('is_complete', { ascending: true })
       .order('due_date', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    setTasks(data || []);
+    setTasks((data || []) as TaskRow[]);
   }
 
   async function loadMembers(listId: string) {
     const { data, error } = await supabase
       .from('list_members')
       .select(`
-        *,
+        id,
+        created_at,
+        list_id,
+        user_id,
+        role,
         profiles (
           email
         )
@@ -349,7 +416,10 @@ export default function DashboardPage() {
   async function createList() {
     try {
       if (!userId) return;
-      if (!newListName.trim()) return;
+      if (!newListName.trim()) {
+        setError('List name is required.');
+        return;
+      }
 
       setError('');
       setMessage('');
@@ -360,7 +430,7 @@ export default function DashboardPage() {
           name: newListName.trim(),
           owner_id: userId,
         })
-        .select()
+        .select('id, name, owner_id, created_at')
         .single();
 
       if (listError) throw listError;
@@ -480,9 +550,13 @@ export default function DashboardPage() {
   async function toggleTask(task: TaskRow) {
     try {
       const nextComplete = !task.is_complete;
+
       const { error } = await supabase
         .from('tasks')
-        .update({ is_complete: nextComplete })
+        .update({
+          is_complete: nextComplete,
+          completed_at: nextComplete ? new Date().toISOString() : null,
+        })
         .eq('id', task.id);
 
       if (error) throw error;
@@ -524,6 +598,11 @@ export default function DashboardPage() {
 
   async function saveEdit(taskId: string) {
     try {
+      if (!editTitle.trim()) {
+        setError('Title is required.');
+        return;
+      }
+
       const dueDate = editDateEnabled ? editDueDate || null : null;
       const dueTime = editDateEnabled && editTimeEnabled ? editDueTime || null : null;
       const reminderValue = dueDate ? Number(editReminder) : null;
@@ -568,7 +647,10 @@ export default function DashboardPage() {
   async function inviteMember() {
     try {
       if (!selectedListId) return;
-      if (!inviteEmail.trim()) return;
+      if (!inviteEmail.trim()) {
+        setError('Email is required.');
+        return;
+      }
 
       setError('');
       setMessage('');
@@ -585,18 +667,25 @@ export default function DashboardPage() {
         throw new Error('That user must sign in once before you can invite them.');
       }
 
+      const { data: existingMember, error: existingMemberError } = await supabase
+        .from('list_members')
+        .select('id')
+        .eq('list_id', selectedListId)
+        .eq('user_id', profile.id)
+        .maybeSingle();
+
+      if (existingMemberError) throw existingMemberError;
+      if (existingMember) {
+        throw new Error('That user is already in this list.');
+      }
+
       const { error: insertError } = await supabase.from('list_members').insert({
         list_id: selectedListId,
         user_id: profile.id,
         role: 'editor',
       });
 
-      if (insertError) {
-        if (insertError.message.toLowerCase().includes('duplicate')) {
-          throw new Error('That user is already in this list.');
-        }
-        throw insertError;
-      }
+      if (insertError) throw insertError;
 
       setInviteEmail('');
       await loadMembers(selectedListId);
@@ -617,10 +706,7 @@ export default function DashboardPage() {
         return;
       }
 
-      const { error } = await supabase
-        .from('list_members')
-        .delete()
-        .eq('id', member.id);
+      const { error } = await supabase.from('list_members').delete().eq('id', member.id);
 
       if (error) throw error;
 
@@ -634,8 +720,10 @@ export default function DashboardPage() {
   async function leaveCurrentList() {
     try {
       if (!userId || !selectedListId) return;
+
       const currentList = lists.find((l) => l.id === selectedListId);
       if (!currentList) return;
+
       if (currentList.owner_id === userId) {
         setError('Owners cannot leave their own list. Delete it instead.');
         return;
@@ -664,8 +752,10 @@ export default function DashboardPage() {
   async function deleteCurrentList() {
     try {
       if (!selectedListId || !userId) return;
+
       const currentList = lists.find((l) => l.id === selectedListId);
       if (!currentList) return;
+
       if (currentList.owner_id !== userId) {
         setError('Only the owner can delete this list.');
         return;
@@ -680,10 +770,7 @@ export default function DashboardPage() {
       setError('');
       setMessage('');
 
-      const { error } = await supabase
-        .from('lists')
-        .delete()
-        .eq('id', selectedListId);
+      const { error } = await supabase.from('lists').delete().eq('id', selectedListId);
 
       if (error) throw error;
 
@@ -734,6 +821,7 @@ export default function DashboardPage() {
 
   const activeTasks = useMemo(() => tasks.filter((t) => !t.is_complete), [tasks]);
   const completedTasks = useMemo(() => tasks.filter((t) => t.is_complete), [tasks]);
+
   const todayTasks = useMemo(
     () => activeTasks.filter((t) => t.due_date === todayYMD()),
     [activeTasks]
@@ -753,13 +841,14 @@ export default function DashboardPage() {
       screen === 'today'
         ? todayTasks
         : screen === 'completed'
-        ? completedTasks
-        : activeTasks;
+          ? completedTasks
+          : activeTasks;
 
     const grouped: Array<{ list: ListRow; tasks: TaskRow[] }> = [];
 
     for (const list of lists) {
       const listTasks = source.filter((t) => t.list_id === list.id);
+
       if (screen === 'all' || screen === 'today' || screen === 'completed') {
         if (listTasks.length) grouped.push({ list, tasks: listTasks });
       } else if (screen === 'list' && selectedListId === list.id) {
@@ -813,12 +902,18 @@ export default function DashboardPage() {
                 ...(isMobile ? styles.cardGridMobile : {}),
               }}
             >
-              <button style={{ ...styles.statCard, ...styles.todayCard }} onClick={() => setScreen('today')}>
+              <button
+                style={{ ...styles.statCard, ...styles.todayCard }}
+                onClick={() => setScreen('today')}
+              >
                 <div style={styles.statCount}>{todayTasks.length}</div>
                 <div style={styles.statLabel}>Today</div>
               </button>
 
-              <button style={{ ...styles.statCard, ...styles.allCard }} onClick={() => setScreen('all')}>
+              <button
+                style={{ ...styles.statCard, ...styles.allCard }}
+                onClick={() => setScreen('all')}
+              >
                 <div style={styles.statCount}>{activeTasks.length}</div>
                 <div style={styles.statLabel}>All</div>
               </button>
@@ -887,11 +982,12 @@ export default function DashboardPage() {
                   {screen === 'today'
                     ? 'Today'
                     : screen === 'all'
-                    ? 'All'
-                    : screen === 'completed'
-                    ? 'Completed'
-                    : 'List'}
+                      ? 'All'
+                      : screen === 'completed'
+                        ? 'Completed'
+                        : 'List'}
                 </div>
+
                 <div style={styles.topBarTitle}>
                   {screen === 'list' && selectedList
                     ? selectedList.name
@@ -918,6 +1014,7 @@ export default function DashboardPage() {
                     >
                       Edit List Name
                     </button>
+
                     <button
                       style={{
                         ...styles.deleteListButton,
@@ -989,9 +1086,7 @@ export default function DashboardPage() {
               ) : (
                 tasksByList.map(({ list, tasks: groupTasks }) => (
                   <div key={list.id} style={styles.groupSection}>
-                    <div style={styles.groupTitle}>
-                      {screen === 'list' ? list.name : list.name}
-                    </div>
+                    <div style={styles.groupTitle}>{list.name}</div>
 
                     {groupTasks.map((task) => {
                       const isExpanded = expandedTaskId === task.id;
@@ -1000,10 +1095,7 @@ export default function DashboardPage() {
 
                       return (
                         <div key={task.id} style={styles.taskRowWrap}>
-                          <div
-                            style={styles.taskRow}
-                            onClick={() => toggleExpanded(task.id)}
-                          >
+                          <div style={styles.taskRow} onClick={() => toggleExpanded(task.id)}>
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1040,7 +1132,9 @@ export default function DashboardPage() {
                                   {task.due_date
                                     ? formatTaskDate(task.due_date, task.due_time)
                                     : 'No due date'}
-                                  {task.reminder_minutes != null ? ` • ${formatReminder(task.reminder_minutes)}` : ''}
+                                  {task.reminder_minutes != null
+                                    ? ` • ${formatReminder(task.reminder_minutes)}`
+                                    : ''}
                                 </div>
                               ) : null}
                             </div>
@@ -1056,6 +1150,7 @@ export default function DashboardPage() {
                                     onChange={(e) => setEditTitle(e.target.value)}
                                     placeholder="Title"
                                   />
+
                                   <textarea
                                     style={styles.textareaDark}
                                     value={editNotes}
@@ -1204,7 +1299,10 @@ export default function DashboardPage() {
                                   <button style={styles.smallDarkButton} onClick={() => startEdit(task)}>
                                     Edit
                                   </button>
-                                  <button style={styles.smallDeleteButton} onClick={() => deleteTask(task.id)}>
+                                  <button
+                                    style={styles.smallDeleteButton}
+                                    onClick={() => deleteTask(task.id)}
+                                  >
                                     Delete
                                   </button>
                                 </div>
@@ -1273,10 +1371,7 @@ export default function DashboardPage() {
           <div style={styles.modalOverlay} onClick={() => setShowCreateModal(false)}>
             <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
               <div style={styles.modalHeader}>
-                <button
-                  style={styles.iconCircle}
-                  onClick={() => setShowCreateModal(false)}
-                >
+                <button style={styles.iconCircle} onClick={() => setShowCreateModal(false)}>
                   ✕
                 </button>
                 <div style={styles.modalTitle}>New Reminder</div>
@@ -1451,7 +1546,7 @@ export default function DashboardPage() {
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   page: {
     minHeight: '100vh',
     background: '#000',
@@ -1506,7 +1601,6 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 6,
     wordBreak: 'break-word',
   },
-
   success: {
     marginBottom: 12,
     padding: 12,
@@ -1523,7 +1617,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fca5a5',
     fontWeight: 600,
   },
-
   cardGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(3, 1fr)',
@@ -1561,7 +1654,6 @@ const styles: Record<string, React.CSSProperties> = {
   completedCard: {
     background: 'linear-gradient(135deg, #a9afb9, #8d949f)',
   },
-
   homePanel: {
     background: '#121317',
     borderRadius: 24,
@@ -1615,7 +1707,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#9db8ff',
     marginLeft: 14,
   },
-
   groupWrap: {
     marginTop: 8,
   },
@@ -1634,7 +1725,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '12px 2px',
     fontSize: 15,
   },
-
   taskRowWrap: {
     borderBottom: '1px solid #1f2430',
     paddingBottom: 8,
@@ -1696,7 +1786,6 @@ const styles: Record<string, React.CSSProperties> = {
   taskMetaOverdue: {
     color: '#f87171',
   },
-
   expandedArea: {
     padding: '10px 0 2px 40px',
   },
@@ -1705,7 +1794,6 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 10,
     flexWrap: 'wrap',
   },
-
   editGrid: {
     display: 'grid',
     gap: 10,
@@ -1718,7 +1806,6 @@ const styles: Record<string, React.CSSProperties> = {
   editButtonRowMobile: {
     flexDirection: 'column',
   },
-
   membersPanelDark: {
     marginTop: 18,
     background: '#121317',
@@ -1760,7 +1847,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     marginTop: 4,
   },
-
   detailActionRow: {
     display: 'flex',
     justifyContent: 'flex-end',
@@ -1795,7 +1881,6 @@ const styles: Record<string, React.CSSProperties> = {
   inlineEditWrap: {
     marginTop: 6,
   },
-
   input: {
     width: '100%',
     padding: '14px 16px',
@@ -1805,6 +1890,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
     fontSize: 16,
     outline: 'none',
+    boxSizing: 'border-box',
   },
   inputDark: {
     width: '100%',
@@ -1845,7 +1931,6 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
     boxSizing: 'border-box',
   },
-
   ghostButton: {
     padding: '10px 14px',
     borderRadius: 14,
@@ -1914,7 +1999,6 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.6,
     cursor: 'not-allowed',
   },
-
   fab: {
     position: 'fixed',
     right: 22,
@@ -1931,7 +2015,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     boxShadow: '0 12px 30px rgba(121,167,255,0.35)',
   },
-
   modalOverlay: {
     position: 'fixed',
     inset: 0,
@@ -2007,7 +2090,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     marginBottom: 2,
   },
-
   appleRow: {
     display: 'flex',
     alignItems: 'center',
@@ -2034,16 +2116,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 17,
     fontWeight: 500,
   },
-
-  toggleRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    color: '#ffffff',
-    fontSize: 17,
-    padding: '8px 0',
-    borderBottom: '1px solid #2a2f39',
-  },
   switch: {
     position: 'relative',
     display: 'inline-block',
@@ -2057,7 +2129,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)',
   },
-
   dateInputWrap: {
     position: 'relative',
   },
@@ -2070,7 +2141,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 18,
     pointerEvents: 'none',
   },
-
   loadingWrap: {
     minHeight: '60vh',
     display: 'flex',
@@ -2079,7 +2149,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
     fontSize: 18,
   },
-
   empty: {
     color: '#9ca3af',
     padding: '8px 0',
