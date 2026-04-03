@@ -359,35 +359,37 @@ export default function DashboardPage() {
   }
 
   async function loadAllTasks(uid?: string) {
-    const actualUserId = uid || userId;
-    if (!actualUserId) return;
+  const actualUserId = uid || userId;
+  if (!actualUserId) return;
 
-    const { data: memberships, error: membershipError } = await supabase
-      .from('list_members')
-      .select('list_id')
-      .eq('user_id', actualUserId);
+  const { data: memberships, error: membershipError } = await supabase
+    .from('list_members')
+    .select('list_id')
+    .eq('user_id', actualUserId);
 
-    if (membershipError) throw membershipError;
+  if (membershipError) throw membershipError;
 
-    const ids = (memberships || []).map((m) => m.list_id);
-    if (!ids.length) {
-      setTasks([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .select(
-        'id, title, is_complete, user_id, list_id, due_date, due_time, priority, reminder_minutes, notes, created_at'
-      )
-      .in('list_id', ids)
-      .order('is_complete', { ascending: true })
-      .order('due_date', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    setTasks((data || []) as TaskRow[]);
+  const ids = (memberships || []).map((m) => m.list_id);
+  if (!ids.length) {
+    setTasks([]);
+    return;
   }
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select(
+      'id, title, is_complete, user_id, list_id, due_date, due_time, priority, reminder_minutes, notes, created_at'
+    )
+    .in('list_id', ids)
+    .order('is_complete', { ascending: true })
+    .order('due_date', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+
+  const rows: TaskRow[] = Array.isArray(data) ? (data as unknown as TaskRow[]) : [];
+  setTasks(rows);
+}
 
   async function loadMembers(listId: string) {
     const { data, error } = await supabase
