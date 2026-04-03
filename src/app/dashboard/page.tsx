@@ -1,1428 +1,2042 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
-type Profile = {
-  id: string
-  email: string | null
-}
-
-type ListMember = {
-  user_id: string
-  role: 'owner' | 'editor' | 'member'
-  profile?: Profile | null
-}
-
-type TaskList = {
+type ListRow = {
   id: string
   name: string
   owner_id: string
-  created_at?: string
-  color?: string | null
-  members?: ListMember[]
+  created_at: string
 }
 
-type Task = {
+type TaskRow = {
   id: string
   title: string
-  completed: boolean
-  list_id: string
-  user_id?: string | null
-  notes?: string | null
-  due_date?: string | null
+  is_complete: boolean
+  user_id: string | null
+  list_id: string | null
+  due_date: string | null
   due_time?: string | null
-  reminder_minutes?: number | null
-  priority?: 'low' | 'medium' | 'high' | null
+  priority: string | null
+  reminder_minutes: number | null
+  notes?: string | null
   created_at?: string
-  completed_at?: string | null
 }
 
-type ViewMode = 'home' | 'today' | 'all' | 'completed' | 'list'
-
-const PRIORITIES: Array<{ value: 'low' | 'medium' | 'high'; label: string }> = [
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-]
-
-const REMINDER_OPTIONS = [
-  { value: 5, label: '5 minutes before' },
-  { value: 15, label: '15 minutes before' },
-  { value: 30, label: '30 minutes before' },
-  { value: 60, label: '1 hour before' },
-  { value: 1440, label: '1 day before' },
-]
-
-const LIST_COLORS = [
-  'bg-sky-400',
-  'bg-emerald-400',
-  'bg-orange-400',
-  'bg-pink-400',
-  'bg-violet-400',
-  'bg-yellow-400',
-]
-
-function isSameDay(dateA: Date, dateB: Date) {
-  return (
-    dateA.getFullYear() === dateB.getFullYear() &&
-    dateA.getMonth() === dateB.getMonth() &&
-    dateA.getDate() === dateB.getDate()
-  )
+type MemberRow = {
+  id: string
+  list_id: string
+  user_id: string
+  role: 'owner' | 'editor' | 'member'
+  created_at: string
+  profiles?: {
+    email: string | null
+  } | null
 }
 
-function formatDue(task: Task) {
-  if (!task.due_date && !task.due_time) return ''
+type Screen = 'home' | 'today' | 'all' | 'completed' | 'list'
 
-  let text = ''
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(false)
 
-  if (task.due_date) {
-    const d = new Date(`${task.due_date}T00:00:00`)
-    const now = new Date()
+  useEffect(() => {
+    const update = () => setIsMobile(window.innerWidth <= breakpoint)
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [breakpoint])
 
-    if (isSameDay(d, now)) {
-      text += 'Today'
+  return isMobile
+}
+
+function todayYMD() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function formatReminder(minutes: number | null | undefined) {
+  if (minutes == null) return 'No reminder'
+  if (minutes === 0) return 'At time'
+  if (minutes === 5) return '5 min before'
+  if (minutes === 10) return '10 min before'
+  if (minutes === 15) return '15 min before'
+  if (minutes === 30) return '30 min before'
+  if (minutes === 60) return '1 hour before'
+  if (minutes === 120) return '2 hours before'
+  if (minutes === 1440) return '1 day before'
+  if (minutes === 2880) return '2 days before'
+  if (minutes === 10080) return '1 week before'
+  return `${minutes} min before`
+}
+
+function formatTaskDate(dateString: string | null | undefined, timeString?: string | null) {
+  if (!dateString) return ''
+  const date = new Date(`${dateString}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return dateString
+  const datePart = date.toLocaleDateString()
+  if (!timeString) return datePart
+
+  const [hh, mm] = timeString.split(':')
+  if (hh == null || mm == null) return datePart
+  const temp = new Date()
+  temp.setHours(Number(hh), Number(mm), 0, 0)
+  const timePart = temp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return `${datePart}, ${timePart}`
+}
+
+function isOverdue(task: TaskRow) {
+  if (task.is_complete || !task.due_date) return false
+  const now = new Date()
+  const due = new Date(`${task.due_date}T${task.due_time || '23:59'}:00`)
+  return due.getTime() < now.getTime()
+}
+
+export default function DashboardPage() {
+  const isMobile = useIsMobile()
+
+  const [userId, setUserId] = useState<string | null>(null)
+  const [userEmail, setUserEmail] = useState<string>('')
+  const [loading, setLoading] = useState(true)
+
+  const [lists, setLists] = useState<ListRow[]>([])
+  const [tasks, setTasks] = useState<TaskRow[]>([])
+  const [members, setMembers] = useState<MemberRow[]>([])
+
+  const [selectedListId, setSelectedListId] = useState<string>('')
+  const [screen, setScreen] = useState<Screen>('home')
+
+  const [showCreateModal, setShowCreateModal] = useState(false)
+
+  const [newListName, setNewListName] = useState('')
+  const [inviteEmail, setInviteEmail] = useState('')
+
+  const [editingListId, setEditingListId] = useState<string | null>(null)
+  const [editListName, setEditListName] = useState('')
+
+  const [newTaskTitle, setNewTaskTitle] = useState('')
+  const [newTaskNotes, setNewTaskNotes] = useState('')
+  const [newTaskDateEnabled, setNewTaskDateEnabled] = useState(true)
+  const [newTaskTimeEnabled, setNewTaskTimeEnabled] = useState(false)
+  const [newTaskDueDate, setNewTaskDueDate] = useState(todayYMD())
+  const [newTaskDueTime, setNewTaskDueTime] = useState('')
+  const [newTaskPriority, setNewTaskPriority] = useState('medium')
+  const [newTaskReminder, setNewTaskReminder] = useState('60')
+  const [newTaskListId, setNewTaskListId] = useState('')
+
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null)
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+
+  const [editTitle, setEditTitle] = useState('')
+  const [editNotes, setEditNotes] = useState('')
+  const [editDateEnabled, setEditDateEnabled] = useState(true)
+  const [editTimeEnabled, setEditTimeEnabled] = useState(false)
+  const [editDueDate, setEditDueDate] = useState('')
+  const [editDueTime, setEditDueTime] = useState('')
+  const [editPriority, setEditPriority] = useState('medium')
+  const [editReminder, setEditReminder] = useState('60')
+
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [deletingList, setDeletingList] = useState(false)
+
+  useEffect(() => {
+    init()
+  }, [])
+
+  useEffect(() => {
+    if (selectedListId) {
+      loadMembers(selectedListId)
     } else {
-      text += d.toLocaleDateString([], {
-        month: 'short',
-        day: 'numeric',
-      })
+      setMembers([])
+    }
+  }, [selectedListId])
+
+  async function init() {
+    try {
+      setLoading(true)
+      setError('')
+      setMessage('')
+
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession()
+
+      if (sessionError) throw sessionError
+      if (!session?.user) {
+        window.location.href = '/'
+        return
+      }
+
+      const uid = session.user.id
+      const email = session.user.email ?? ''
+
+      setUserId(uid)
+      setUserEmail(email)
+
+      await ensureProfile(uid, email)
+      await ensurePersonalList(uid)
+      await loadLists(uid)
+      await loadAllTasks(uid)
+    } catch (e: any) {
+      setError(e.message || 'Failed to load dashboard')
+    } finally {
+      setLoading(false)
     }
   }
 
-  if (task.due_time) {
-    const [h, m] = task.due_time.split(':')
-    const dt = new Date()
-    dt.setHours(Number(h), Number(m), 0, 0)
-    const timeText = dt.toLocaleTimeString([], {
-      hour: 'numeric',
-      minute: '2-digit',
-    })
-    text += text ? ` at ${timeText}` : timeText
+  async function ensureProfile(uid: string, email: string) {
+    const { error } = await supabase
+      .from('profiles')
+      .upsert({ id: uid, email }, { onConflict: 'id' })
+
+    if (error) throw error
   }
 
-  return text
-}
+  async function ensurePersonalList(uid: string) {
+    const { data: existingMemberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select('id, list_id')
+      .eq('user_id', uid)
+      .limit(1)
 
-function formatTimeValue(value: string | null | undefined) {
-  if (!value) return 'Time'
-  const [h, m] = value.split(':')
-  const d = new Date()
-  d.setHours(Number(h), Number(m), 0, 0)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-}
+    if (membershipError) throw membershipError
+    if (existingMemberships && existingMemberships.length > 0) return
 
-function getInitials(email?: string | null) {
-  if (!email) return 'U'
-  const left = email.split('@')[0] || 'U'
-  const parts = left.split(/[.\-_ ]+/).filter(Boolean)
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase()
-}
+    const { data: newList, error: listError } = await supabase
+      .from('lists')
+      .insert({
+        name: 'My Tasks',
+        owner_id: uid,
+      })
+      .select()
+      .single()
 
-function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(' ')
-}
+    if (listError) throw listError
 
-export default function HomePage() {
-  const [loading, setLoading] = useState(true)
-  const [userId, setUserId] = useState<string | null>(null)
-  const [userEmail, setUserEmail] = useState<string | null>(null)
+    const { error: memberError } = await supabase.from('list_members').insert({
+      list_id: newList.id,
+      user_id: uid,
+      role: 'owner',
+    })
 
-  const [lists, setLists] = useState<TaskList[]>([])
-  const [tasks, setTasks] = useState<Task[]>([])
+    if (memberError) throw memberError
 
-  const [viewMode, setViewMode] = useState<ViewMode>('home')
-  const [selectedListId, setSelectedListId] = useState<string | null>(null)
+    const { error: backfillError } = await supabase
+      .from('tasks')
+      .update({ list_id: newList.id })
+      .eq('user_id', uid)
+      .is('list_id', null)
 
-  const [showQuickSheet, setShowQuickSheet] = useState(false)
-  const [showTaskModal, setShowTaskModal] = useState(false)
-  const [showListModal, setShowListModal] = useState(false)
+    if (backfillError) throw backfillError
+  }
 
-  const [editingTask, setEditingTask] = useState<Task | null>(null)
-  const [editingListId, setEditingListId] = useState<string | null>(null)
-  const [editingListName, setEditingListName] = useState('')
-  const editInputRef = useRef<HTMLInputElement | null>(null)
+  async function loadLists(uid?: string) {
+    const actualUserId = uid || userId
+    if (!actualUserId) return
 
-  const [menuTaskId, setMenuTaskId] = useState<string | null>(null)
-  const [menuListId, setMenuListId] = useState<string | null>(null)
+    const { data: memberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select(`
+        list_id,
+        role,
+        lists (
+          id,
+          name,
+          owner_id,
+          created_at
+        )
+      `)
+      .eq('user_id', actualUserId)
 
-  const [showCompleted, setShowCompleted] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
+    if (membershipError) throw membershipError
 
-  const [taskForm, setTaskForm] = useState({
-    title: '',
-    notes: '',
-    list_id: '',
-    due_date: '',
-    due_time: '',
-    reminder_minutes: '60',
-    priority: 'medium' as 'low' | 'medium' | 'high',
-  })
+    const loadedLists = (memberships || [])
+      .map((m: any) => m.lists)
+      .filter(Boolean) as ListRow[]
 
-  const [listFormName, setListFormName] = useState('')
+    setLists(loadedLists)
 
-  const taskTitleRef = useRef<HTMLInputElement | null>(null)
-  const listTitleRef = useRef<HTMLInputElement | null>(null)
-  const timeInputRef = useRef<HTMLInputElement | null>(null)
+    setSelectedListId((current) => {
+      const selected = current && loadedLists.some((l) => l.id === current)
+      const nextId = selected ? current : loadedLists[0]?.id || ''
+      setNewTaskListId((prev) => prev || nextId)
+      return nextId
+    })
+  }
+
+  async function loadAllTasks(uid?: string) {
+    const actualUserId = uid || userId
+    if (!actualUserId) return
+
+    const { data: memberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select('list_id')
+      .eq('user_id', actualUserId)
+
+    if (membershipError) throw membershipError
+
+    const ids = (memberships || []).map((m) => m.list_id)
+    if (!ids.length) {
+      setTasks([])
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .in('list_id', ids)
+      .order('is_complete', { ascending: true })
+      .order('due_date', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    setTasks(data || [])
+  }
+
+  async function loadMembers(listId: string) {
+    const { data, error } = await supabase
+      .from('list_members')
+      .select(`
+        *,
+        profiles (
+          email
+        )
+      `)
+      .eq('list_id', listId)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      setError(error.message)
+      return
+    }
+
+    setMembers((data as MemberRow[]) || [])
+  }
+
+  async function createList() {
+    try {
+      if (!userId) return
+      if (!newListName.trim()) return
+
+      setError('')
+      setMessage('')
+
+      const { data: list, error: listError } = await supabase
+        .from('lists')
+        .insert({
+          name: newListName.trim(),
+          owner_id: userId,
+        })
+        .select()
+        .single()
+
+      if (listError) throw listError
+
+      const { error: memberError } = await supabase.from('list_members').insert({
+        list_id: list.id,
+        user_id: userId,
+        role: 'owner',
+      })
+
+      if (memberError) throw memberError
+
+      setNewListName('')
+      await loadLists()
+      await loadAllTasks()
+      setSelectedListId(list.id)
+      setScreen('list')
+      setMessage('List created')
+    } catch (e: any) {
+      setError(e.message || 'Failed to create list')
+    }
+  }
+
+  function startEditList(list: ListRow) {
+    setEditingListId(list.id)
+    setEditListName(list.name)
+  }
+
+  function cancelEditList() {
+    setEditingListId(null)
+    setEditListName('')
+  }
+
+  async function saveEditList() {
+    try {
+      if (!editingListId) return
+      if (!editListName.trim()) {
+        setError('List name is required.')
+        return
+      }
+
+      setError('')
+      setMessage('')
+
+      const { error } = await supabase
+        .from('lists')
+        .update({ name: editListName.trim() })
+        .eq('id', editingListId)
+
+      if (error) throw error
+
+      await loadLists()
+      cancelEditList()
+      setMessage('List updated')
+    } catch (e: any) {
+      setError(e.message || 'Failed to update list')
+    }
+  }
+
+  async function addTask() {
+    try {
+      if (!userId) return
+      if (!newTaskTitle.trim()) {
+        setError('Title is required.')
+        return
+      }
+      if (!newTaskListId) {
+        setError('Select a list.')
+        return
+      }
+
+      setError('')
+      setMessage('')
+
+      const dueDate = newTaskDateEnabled ? newTaskDueDate || null : null
+      const dueTime = newTaskDateEnabled && newTaskTimeEnabled ? newTaskDueTime || null : null
+      const reminderValue = dueDate ? Number(newTaskReminder) : null
+
+      const payload = {
+        title: newTaskTitle.trim(),
+        notes: newTaskNotes.trim() || null,
+        is_complete: false,
+        user_id: userId,
+        list_id: newTaskListId,
+        due_date: dueDate,
+        due_time: dueTime,
+        priority: newTaskPriority || 'medium',
+        reminder_minutes: reminderValue,
+      }
+
+      const { error } = await supabase.from('tasks').insert(payload)
+      if (error) throw error
+
+      resetCreateForm()
+      setShowCreateModal(false)
+      await loadAllTasks()
+      setSelectedListId(newTaskListId)
+      setScreen('list')
+      setMessage('Task added')
+    } catch (e: any) {
+      setError(e.message || 'Failed to add task')
+    }
+  }
+
+  function resetCreateForm() {
+    setNewTaskTitle('')
+    setNewTaskNotes('')
+    setNewTaskDateEnabled(true)
+    setNewTaskTimeEnabled(false)
+    setNewTaskDueDate(todayYMD())
+    setNewTaskDueTime('')
+    setNewTaskPriority('medium')
+    setNewTaskReminder('60')
+    setNewTaskListId(selectedListId || lists[0]?.id || '')
+  }
+
+  async function toggleTask(task: TaskRow) {
+    try {
+      const nextComplete = !task.is_complete
+      const { error } = await supabase
+        .from('tasks')
+        .update({ is_complete: nextComplete })
+        .eq('id', task.id)
+
+      if (error) throw error
+
+      if (expandedTaskId === task.id) setExpandedTaskId(null)
+      if (editingTaskId === task.id) cancelEdit()
+
+      await loadAllTasks()
+      setMessage(nextComplete ? 'Task completed' : 'Task reopened')
+    } catch (e: any) {
+      setError(e.message || 'Failed to update task')
+    }
+  }
+
+  function startEdit(task: TaskRow) {
+    setEditingTaskId(task.id)
+    setExpandedTaskId(task.id)
+    setEditTitle(task.title)
+    setEditNotes(task.notes || '')
+    setEditDateEnabled(!!task.due_date)
+    setEditTimeEnabled(!!task.due_time)
+    setEditDueDate(task.due_date || todayYMD())
+    setEditDueTime(task.due_time || '')
+    setEditPriority(task.priority || 'medium')
+    setEditReminder(task.reminder_minutes == null ? '60' : String(task.reminder_minutes))
+  }
+
+  function cancelEdit() {
+    setEditingTaskId(null)
+    setEditTitle('')
+    setEditNotes('')
+    setEditDateEnabled(true)
+    setEditTimeEnabled(false)
+    setEditDueDate(todayYMD())
+    setEditDueTime('')
+    setEditPriority('medium')
+    setEditReminder('60')
+  }
+
+  async function saveEdit(taskId: string) {
+    try {
+      const dueDate = editDateEnabled ? editDueDate || null : null
+      const dueTime = editDateEnabled && editTimeEnabled ? editDueTime || null : null
+      const reminderValue = dueDate ? Number(editReminder) : null
+
+      const { error } = await supabase
+        .from('tasks')
+        .update({
+          title: editTitle.trim(),
+          notes: editNotes.trim() || null,
+          due_date: dueDate,
+          due_time: dueTime,
+          priority: editPriority || 'medium',
+          reminder_minutes: reminderValue,
+        })
+        .eq('id', taskId)
+
+      if (error) throw error
+
+      cancelEdit()
+      await loadAllTasks()
+      setMessage('Task updated')
+    } catch (e: any) {
+      setError(e.message || 'Failed to save task')
+    }
+  }
+
+  async function deleteTask(taskId: string) {
+    try {
+      const { error } = await supabase.from('tasks').delete().eq('id', taskId)
+      if (error) throw error
+
+      if (expandedTaskId === taskId) setExpandedTaskId(null)
+      if (editingTaskId === taskId) cancelEdit()
+
+      await loadAllTasks()
+      setMessage('Task deleted')
+    } catch (e: any) {
+      setError(e.message || 'Failed to delete task')
+    }
+  }
+
+  async function inviteMember() {
+    try {
+      if (!selectedListId) return
+      if (!inviteEmail.trim()) return
+
+      setError('')
+      setMessage('')
+
+      const normalized = inviteEmail.trim().toLowerCase()
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id, email')
+        .eq('email', normalized)
+        .single()
+
+      if (profileError || !profile) {
+        throw new Error('That user must sign in once before you can invite them.')
+      }
+
+      const { error: insertError } = await supabase.from('list_members').insert({
+        list_id: selectedListId,
+        user_id: profile.id,
+        role: 'editor',
+      })
+
+      if (insertError) {
+        if (insertError.message.toLowerCase().includes('duplicate')) {
+          throw new Error('That user is already in this list.')
+        }
+        throw insertError
+      }
+
+      setInviteEmail('')
+      await loadMembers(selectedListId)
+      await loadLists()
+      setMessage(`Invited ${normalized}`)
+    } catch (e: any) {
+      setError(e.message || 'Failed to invite member')
+    }
+  }
+
+  async function removeMember(member: MemberRow) {
+    try {
+      const currentList = lists.find((l) => l.id === selectedListId)
+      if (!currentList) return
+
+      if (member.user_id === currentList.owner_id) {
+        setError('You cannot remove the owner.')
+        return
+      }
+
+      const { error } = await supabase
+        .from('list_members')
+        .delete()
+        .eq('id', member.id)
+
+      if (error) throw error
+
+      await loadMembers(selectedListId)
+      setMessage('Member removed')
+    } catch (e: any) {
+      setError(e.message || 'Failed to remove member')
+    }
+  }
+
+  async function leaveCurrentList() {
+    try {
+      if (!userId || !selectedListId) return
+      const currentList = lists.find((l) => l.id === selectedListId)
+      if (!currentList) return
+      if (currentList.owner_id === userId) {
+        setError('Owners cannot leave their own list. Delete it instead.')
+        return
+      }
+
+      setError('')
+      setMessage('')
+
+      const { error } = await supabase
+        .from('list_members')
+        .delete()
+        .eq('list_id', selectedListId)
+        .eq('user_id', userId)
+
+      if (error) throw error
+
+      await loadLists()
+      await loadAllTasks()
+      setScreen('home')
+      setMessage('You left the list')
+    } catch (e: any) {
+      setError(e.message || 'Failed to leave list')
+    }
+  }
+
+  async function deleteCurrentList() {
+    try {
+      if (!selectedListId || !userId) return
+      const currentList = lists.find((l) => l.id === selectedListId)
+      if (!currentList) return
+      if (currentList.owner_id !== userId) {
+        setError('Only the owner can delete this list.')
+        return
+      }
+
+      const ok = window.confirm(
+        `Delete list "${currentList.name}"? This will remove its tasks and memberships.`
+      )
+      if (!ok) return
+
+      setDeletingList(true)
+      setError('')
+      setMessage('')
+
+      const { error } = await supabase
+        .from('lists')
+        .delete()
+        .eq('id', selectedListId)
+
+      if (error) throw error
+
+      setExpandedTaskId(null)
+      setEditingTaskId(null)
+      cancelEditList()
+      await loadLists()
+      await loadAllTasks()
+      setScreen('home')
+      setMessage('List deleted')
+    } catch (e: any) {
+      setError(e.message || 'Failed to delete list')
+    } finally {
+      setDeletingList(false)
+    }
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut()
+    window.location.href = '/'
+  }
+
+  function openCreateModal(defaultListId?: string) {
+    setNewTaskListId(defaultListId || selectedListId || lists[0]?.id || '')
+    setShowCreateModal(true)
+  }
+
+  function toggleExpanded(taskId: string) {
+    setExpandedTaskId((current) => (current === taskId ? null : taskId))
+  }
+
+  function goBackHome() {
+    setScreen('home')
+    setExpandedTaskId(null)
+    setEditingTaskId(null)
+    cancelEditList()
+  }
 
   const selectedList = useMemo(
     () => lists.find((l) => l.id === selectedListId) || null,
     [lists, selectedListId]
   )
 
-  const listMap = useMemo(() => {
-    const map = new Map<string, TaskList>()
-    for (const list of lists) map.set(list.id, list)
-    return map
-  }, [lists])
-
-  const refreshAll = useCallback(async () => {
-    setLoading(true)
-
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser()
-
-    if (userError || !user) {
-      setLoading(false)
-      return
-    }
-
-    setUserId(user.id)
-    setUserEmail(user.email ?? null)
-
-    const { data: membershipRows, error: membershipError } = await supabase
-      .from('list_members')
-      .select(
-        `
-        list_id,
-        role
-      `
-      )
-      .eq('user_id', user.id)
-
-    if (membershipError) {
-      console.error(membershipError)
-      setLoading(false)
-      return
-    }
-
-    const listIds = (membershipRows || []).map((m: any) => m.list_id)
-
-    if (listIds.length === 0) {
-      setLists([])
-      setTasks([])
-      setLoading(false)
-      return
-    }
-
-    const { data: listsData, error: listsError } = await supabase
-      .from('lists')
-      .select('*')
-      .in('id', listIds)
-      .order('created_at', { ascending: true })
-
-    if (listsError) {
-      console.error(listsError)
-      setLoading(false)
-      return
-    }
-
-    const { data: membersData, error: membersError } = await supabase
-      .from('list_members')
-      .select(
-        `
-        list_id,
-        user_id,
-        role,
-        profiles (
-          id,
-          email
-        )
-      `
-      )
-      .in('list_id', listIds)
-
-    if (membersError) {
-      console.error(membersError)
-      setLoading(false)
-      return
-    }
-
-    const memberMap = new Map<string, ListMember[]>()
-
-    for (const row of membersData || []) {
-      const existing = memberMap.get(row.list_id) || []
-      existing.push({
-        user_id: row.user_id,
-        role: row.role,
-        profile: Array.isArray((row as any).profiles)
-          ? (row as any).profiles[0] ?? null
-          : (row as any).profiles ?? null,
-      })
-      memberMap.set(row.list_id, existing)
-    }
-
-    const combinedLists: TaskList[] = (listsData || []).map((list: any, index: number) => ({
-      ...list,
-      color: list.color || LIST_COLORS[index % LIST_COLORS.length],
-      members: memberMap.get(list.id) || [],
-    }))
-
-    const { data: tasksData, error: tasksError } = await supabase
-      .from('tasks')
-      .select('*')
-      .in('list_id', listIds)
-      .order('completed', { ascending: true })
-      .order('created_at', { ascending: false })
-
-    if (tasksError) {
-      console.error(tasksError)
-      setLoading(false)
-      return
-    }
-
-    setLists(combinedLists)
-    setTasks(tasksData || [])
-
-    if (!selectedListId && combinedLists.length > 0) {
-      setSelectedListId(combinedLists[0].id)
-    }
-
-    setLoading(false)
-  }, [selectedListId])
-
-  useEffect(() => {
-    refreshAll()
-  }, [refreshAll])
-
-  useEffect(() => {
-    if (editingListId && editInputRef.current) {
-      editInputRef.current.focus()
-      editInputRef.current.select()
-    }
-  }, [editingListId])
-
-  useEffect(() => {
-    if (showTaskModal && taskTitleRef.current) {
-      taskTitleRef.current.focus()
-    }
-  }, [showTaskModal])
-
-  useEffect(() => {
-    if (showListModal && listTitleRef.current) {
-      listTitleRef.current.focus()
-    }
-  }, [showListModal])
-
-  useEffect(() => {
-    if (!toast) return
-    const timer = setTimeout(() => setToast(null), 2400)
-    return () => clearTimeout(timer)
-  }, [toast])
-
-  const allOpenTasks = useMemo(() => tasks.filter((t) => !t.completed), [tasks])
-
-  const todayTasks = useMemo(() => {
-    const now = new Date()
-    return tasks.filter((task) => {
-      if (task.completed || !task.due_date) return false
-      const due = new Date(`${task.due_date}T00:00:00`)
-      return isSameDay(now, due)
-    })
-  }, [tasks])
-
-  const completedTasks = useMemo(
-    () =>
-      tasks
-        .filter((t) => t.completed)
-        .sort((a, b) => {
-          const aDate = a.completed_at || a.created_at || ''
-          const bDate = b.completed_at || b.created_at || ''
-          return aDate < bDate ? 1 : -1
-        }),
-    [tasks]
+  const currentUserMembership = useMemo(
+    () => members.find((m) => m.user_id === userId) || null,
+    [members, userId]
   )
 
-  const visibleTasks = useMemo(() => {
-    if (viewMode === 'today') return todayTasks
-    if (viewMode === 'all') return allOpenTasks
-    if (viewMode === 'completed') return completedTasks
-    if (viewMode === 'list' && selectedListId) {
-      return tasks.filter((t) => t.list_id === selectedListId && !t.completed)
+  const activeTasks = useMemo(() => tasks.filter((t) => !t.is_complete), [tasks])
+  const completedTasks = useMemo(() => tasks.filter((t) => t.is_complete), [tasks])
+  const todayTasks = useMemo(
+    () => activeTasks.filter((t) => t.due_date === todayYMD()),
+    [activeTasks]
+  )
+
+  const listCounts = useMemo(() => {
+    const map: Record<string, number> = {}
+    for (const t of activeTasks) {
+      if (!t.list_id) continue
+      map[t.list_id] = (map[t.list_id] || 0) + 1
     }
-    return []
-  }, [viewMode, todayTasks, allOpenTasks, completedTasks, tasks, selectedListId])
+    return map
+  }, [activeTasks])
 
-  const visibleCompletedForList = useMemo(() => {
-    if (!selectedListId) return []
-    return tasks
-      .filter((t) => t.list_id === selectedListId && t.completed)
-      .sort((a, b) => {
-        const aDate = a.completed_at || a.created_at || ''
-        const bDate = b.completed_at || b.created_at || ''
-        return aDate < bDate ? 1 : -1
-      })
-  }, [tasks, selectedListId])
+  const tasksByList = useMemo(() => {
+    const source =
+      screen === 'today'
+        ? todayTasks
+        : screen === 'completed'
+        ? completedTasks
+        : activeTasks
 
-  const openCreateTask = (listId?: string) => {
-    setEditingTask(null)
-    setTaskForm({
-      title: '',
-      notes: '',
-      list_id: listId || selectedListId || lists[0]?.id || '',
-      due_date: '',
-      due_time: '',
-      reminder_minutes: '60',
-      priority: 'medium',
-    })
-    setShowTaskModal(true)
-  }
+    const grouped: Array<{ list: ListRow; tasks: TaskRow[] }> = []
 
-  const openEditTask = (task: Task) => {
-    setEditingTask(task)
-    setTaskForm({
-      title: task.title || '',
-      notes: task.notes || '',
-      list_id: task.list_id || '',
-      due_date: task.due_date || '',
-      due_time: task.due_time || '',
-      reminder_minutes: String(task.reminder_minutes ?? 60),
-      priority: (task.priority as 'low' | 'medium' | 'high') || 'medium',
-    })
-    setShowTaskModal(true)
-    setMenuTaskId(null)
-  }
-
-  const openCreateList = () => {
-    setListFormName('')
-    setShowListModal(true)
-  }
-
-  const closeAllModals = () => {
-    setShowQuickSheet(false)
-    setShowTaskModal(false)
-    setShowListModal(false)
-    setMenuTaskId(null)
-    setMenuListId(null)
-  }
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      const isTyping =
-        tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable
-
-      if (e.key === 'Escape') {
-        closeAllModals()
-        setEditingListId(null)
-        return
-      }
-
-      if (isTyping) return
-
-      if (e.key === 'n' && !e.shiftKey) {
-        e.preventDefault()
-        openCreateTask()
-      }
-
-      if (e.key === 'N' && e.shiftKey) {
-        e.preventDefault()
-        openCreateList()
+    for (const list of lists) {
+      const listTasks = source.filter((t) => t.list_id === list.id)
+      if (screen === 'all' || screen === 'today' || screen === 'completed') {
+        if (listTasks.length) grouped.push({ list, tasks: listTasks })
+      } else if (screen === 'list' && selectedListId === list.id) {
+        grouped.push({ list, tasks: listTasks })
       }
     }
 
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [lists, selectedListId])
+    return grouped
+  }, [screen, todayTasks, completedTasks, activeTasks, lists, selectedListId])
 
-  async function saveTask() {
-    const title = taskForm.title.trim()
-    if (!title || !taskForm.list_id) return
+  const homeListRows = useMemo(
+    () =>
+      lists.map((list) => ({
+        ...list,
+        count: listCounts[list.id] || 0,
+      })),
+    [lists, listCounts]
+  )
 
-    if (editingTask) {
-      const optimistic: Task = {
-        ...editingTask,
-        title,
-        notes: taskForm.notes || null,
-        list_id: taskForm.list_id,
-        due_date: taskForm.due_date || null,
-        due_time: taskForm.due_time || null,
-        reminder_minutes: Number(taskForm.reminder_minutes),
-        priority: taskForm.priority,
-      }
-
-      setTasks((curr) => curr.map((t) => (t.id === editingTask.id ? optimistic : t)))
-      setShowTaskModal(false)
-
-      const { error } = await supabase
-        .from('tasks')
-        .update({
-          title,
-          notes: taskForm.notes || null,
-          list_id: taskForm.list_id,
-          due_date: taskForm.due_date || null,
-          due_time: taskForm.due_time || null,
-          reminder_minutes: Number(taskForm.reminder_minutes),
-          priority: taskForm.priority,
-        })
-        .eq('id', editingTask.id)
-
-      if (error) {
-        console.error(error)
-        setToast('Could not save task')
-        await refreshAll()
-      } else {
-        setToast('Task updated')
-      }
-
-      return
-    }
-
-    const insertPayload = {
-      title,
-      completed: false,
-      list_id: taskForm.list_id,
-      user_id: userId,
-      notes: taskForm.notes || null,
-      due_date: taskForm.due_date || null,
-      due_time: taskForm.due_time || null,
-      reminder_minutes: Number(taskForm.reminder_minutes),
-      priority: taskForm.priority,
-    }
-
-    const { data, error } = await supabase.from('tasks').insert(insertPayload).select().single()
-
-    if (error) {
-      console.error(error)
-      setToast('Could not create task')
-      return
-    }
-
-    setTasks((curr) => [data, ...curr])
-    setShowTaskModal(false)
-    setToast('Task created')
-  }
-
-  async function saveList() {
-    const name = listFormName.trim()
-    if (!name || !userId) return
-
-    const { data: insertedList, error: listError } = await supabase
-      .from('lists')
-      .insert({
-        name,
-        owner_id: userId,
-      })
-      .select()
-      .single()
-
-    if (listError || !insertedList) {
-      console.error(listError)
-      setToast('Could not create list')
-      return
-    }
-
-    const { error: memberError } = await supabase.from('list_members').insert({
-      list_id: insertedList.id,
-      user_id: userId,
-      role: 'owner',
-    })
-
-    if (memberError) {
-      console.error(memberError)
-      setToast('List created, but membership failed')
-      await refreshAll()
-      return
-    }
-
-    const newList: TaskList = {
-      ...insertedList,
-      color: LIST_COLORS[lists.length % LIST_COLORS.length],
-      members: [
-        {
-          user_id: userId,
-          role: 'owner',
-          profile: userEmail ? { id: userId, email: userEmail } : null,
-        },
-      ],
-    }
-
-    setLists((curr) => [...curr, newList])
-    setSelectedListId(insertedList.id)
-    setViewMode('list')
-    setShowListModal(false)
-    setToast('List created')
-  }
-
-  function startEditListName(list: TaskList) {
-    setEditingListId(list.id)
-    setEditingListName(list.name)
-    setMenuListId(null)
-  }
-
-  function cancelEditListName() {
-    setEditingListId(null)
-    setEditingListName('')
-  }
-
-  async function saveListName(id: string) {
-    const name = editingListName.trim()
-    if (!name) {
-      cancelEditListName()
-      return
-    }
-
-    const previous = lists
-    setLists((curr) => curr.map((l) => (l.id === id ? { ...l, name } : l)))
-    cancelEditListName()
-
-    const { error } = await supabase.from('lists').update({ name }).eq('id', id)
-    if (error) {
-      console.error(error)
-      setLists(previous)
-      setToast('Could not rename list')
-    } else {
-      setToast('List renamed')
-    }
-  }
-
-  async function toggleTask(taskId: string, completed: boolean) {
-    const previous = tasks
-    const now = new Date().toISOString()
-
-    setTasks((curr) =>
-      curr.map((t) =>
-        t.id === taskId
-          ? { ...t, completed, completed_at: completed ? now : null }
-          : t
-      )
-    )
-
-    const { error } = await supabase
-      .from('tasks')
-      .update({
-        completed,
-        completed_at: completed ? now : null,
-      })
-      .eq('id', taskId)
-
-    if (error) {
-      console.error(error)
-      setTasks(previous)
-      setToast('Could not update task')
-      return
-    }
-
-    setToast(completed ? 'Task completed' : 'Task reopened')
-  }
-
-  async function deleteTask(taskId: string) {
-    const previous = tasks
-    setTasks((curr) => curr.filter((t) => t.id !== taskId))
-    setMenuTaskId(null)
-
-    const { error } = await supabase.from('tasks').delete().eq('id', taskId)
-
-    if (error) {
-      console.error(error)
-      setTasks(previous)
-      setToast('Could not delete task')
-      return
-    }
-
-    setToast('Task deleted')
-  }
-
-  async function leaveList(listId: string) {
-    if (!userId) return
-
-    const { error } = await supabase
-      .from('list_members')
-      .delete()
-      .eq('list_id', listId)
-      .eq('user_id', userId)
-
-    if (error) {
-      console.error(error)
-      setToast('Could not leave list')
-      return
-    }
-
-    const remainingLists = lists.filter((l) => l.id !== listId)
-    const remainingTasks = tasks.filter((t) => t.list_id !== listId)
-
-    setLists(remainingLists)
-    setTasks(remainingTasks)
-    setMenuListId(null)
-
-    if (selectedListId === listId) {
-      setSelectedListId(remainingLists[0]?.id || null)
-      setViewMode('home')
-    }
-
-    setToast('You left the list')
-  }
-
-  async function deleteList(listId: string) {
-    const listTasks = tasks.filter((t) => t.list_id === listId).map((t) => t.id)
-
-    if (listTasks.length > 0) {
-      const { error: taskError } = await supabase.from('tasks').delete().eq('list_id', listId)
-      if (taskError) {
-        console.error(taskError)
-        setToast('Could not delete list tasks')
-        return
-      }
-    }
-
-    const { error: memberError } = await supabase.from('list_members').delete().eq('list_id', listId)
-    if (memberError) {
-      console.error(memberError)
-      setToast('Could not delete list members')
-      return
-    }
-
-    const { error: listError } = await supabase.from('lists').delete().eq('id', listId)
-    if (listError) {
-      console.error(listError)
-      setToast('Could not delete list')
-      return
-    }
-
-    const remainingLists = lists.filter((l) => l.id !== listId)
-    const remainingTasks = tasks.filter((t) => t.list_id !== listId)
-
-    setLists(remainingLists)
-    setTasks(remainingTasks)
-    setMenuListId(null)
-
-    if (selectedListId === listId) {
-      setSelectedListId(remainingLists[0]?.id || null)
-      setViewMode('home')
-    }
-
-    setToast('List deleted')
-  }
-
-  function openList(listId: string) {
-    setSelectedListId(listId)
-    setViewMode('list')
-  }
-
-  function getRole(list: TaskList) {
-    return list.members?.find((m) => m.user_id === userId)?.role || 'member'
-  }
-
-  function isShared(list: TaskList) {
-    return (list.members?.length || 0) > 1
-  }
+  const isOwner = !!selectedList && selectedList.owner_id === userId
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#111827,_#020617_65%)] text-white">
-        <div className="mx-auto max-w-3xl px-5 py-8">
-          <div className="animate-pulse space-y-4">
-            <div className="h-10 w-40 rounded-2xl bg-white/10" />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="h-28 rounded-3xl bg-white/10" />
-              <div className="h-28 rounded-3xl bg-white/10" />
-              <div className="h-28 rounded-3xl bg-white/10" />
-            </div>
-            <div className="h-80 rounded-3xl bg-white/10" />
-          </div>
-        </div>
+      <main style={styles.page}>
+        <div style={styles.loadingWrap}>Loading...</div>
       </main>
     )
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#131a2b,_#04070f_60%,_#010204_100%)] text-white">
-      <div className="mx-auto max-w-3xl px-5 pb-28 pt-6">
-        <header className="mb-6 flex items-start justify-between gap-4">
-          <div>
-            {viewMode !== 'home' ? (
-              <button
-                onClick={() => setViewMode('home')}
-                className="mb-3 inline-flex items-center gap-2 rounded-2xl bg-white/5 px-3 py-2 text-sm text-zinc-300 transition hover:bg-white/10 active:scale-[0.98]"
-              >
-                <span>←</span>
-                <span>Back</span>
-              </button>
-            ) : null}
+    <main style={styles.page}>
+      <div style={styles.container}>
+        {message ? <div style={styles.success}>{message}</div> : null}
+        {error ? <div style={styles.error}>{error}</div> : null}
 
-            <h1 className="text-4xl font-semibold tracking-tight">
-              {viewMode === 'home' && 'TaskMate'}
-              {viewMode === 'today' && 'Today'}
-              {viewMode === 'all' && 'All Tasks'}
-              {viewMode === 'completed' && 'Completed'}
-              {viewMode === 'list' && (selectedList?.name || 'List')}
-            </h1>
-
-            <p className="mt-2 text-sm text-zinc-400">
-              {viewMode === 'home'
-                ? 'A calmer way to keep track of everything.'
-                : viewMode === 'list'
-                ? `${visibleTasks.length} open • ${visibleCompletedForList.length} completed`
-                : `${visibleTasks.length} tasks`}
-            </p>
-          </div>
-
-          <button
-            onClick={refreshAll}
-            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-300 transition hover:bg-white/10 active:scale-[0.98]"
-          >
-            Refresh
-          </button>
-        </header>
-
-        {viewMode === 'home' ? (
+        {screen === 'home' ? (
           <>
-            <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <button
-                onClick={() => setViewMode('today')}
-                className="rounded-3xl border border-white/10 bg-white/5 p-5 text-left backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.35)] transition hover:bg-white/10 active:scale-[0.98]"
-              >
-                <div className="text-sm text-zinc-400">Today</div>
-                <div className="mt-3 text-4xl font-semibold">{todayTasks.length}</div>
-                <div className="mt-2 text-sm text-zinc-500">Due today</div>
+            <div style={styles.homeHeader}>
+              <div>
+                <h1 style={styles.appTitle}>TaskMate</h1>
+                <div style={styles.subtle}>Signed in as {userEmail}</div>
+              </div>
+              <button style={styles.ghostButton} onClick={signOut}>
+                Sign out
+              </button>
+            </div>
+
+            <div
+              style={{
+                ...styles.cardGrid,
+                ...(isMobile ? styles.cardGridMobile : {}),
+              }}
+            >
+              <button style={{ ...styles.statCard, ...styles.todayCard }} onClick={() => setScreen('today')}>
+                <div style={styles.statCount}>{todayTasks.length}</div>
+                <div style={styles.statLabel}>Today</div>
               </button>
 
-              <button
-                onClick={() => setViewMode('all')}
-                className="rounded-3xl border border-white/10 bg-white/5 p-5 text-left backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.35)] transition hover:bg-white/10 active:scale-[0.98]"
-              >
-                <div className="text-sm text-zinc-400">All</div>
-                <div className="mt-3 text-4xl font-semibold">{allOpenTasks.length}</div>
-                <div className="mt-2 text-sm text-zinc-500">Open tasks</div>
+              <button style={{ ...styles.statCard, ...styles.allCard }} onClick={() => setScreen('all')}>
+                <div style={styles.statCount}>{activeTasks.length}</div>
+                <div style={styles.statLabel}>All</div>
               </button>
 
-              <button
-                onClick={() => setViewMode('completed')}
-                className="rounded-3xl border border-white/10 bg-white/5 p-5 text-left backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.35)] transition hover:bg-white/10 active:scale-[0.98]"
-              >
-                <div className="text-sm text-zinc-400">Completed</div>
-                <div className="mt-3 text-4xl font-semibold">{completedTasks.length}</div>
-                <div className="mt-2 text-sm text-zinc-500">Finished items</div>
+              <button style={{ ...styles.statCard, ...styles.completedCard }} onClick={() => setScreen('completed')}>
+                <div style={styles.statCount}>{completedTasks.length}</div>
+                <div style={styles.statLabel}>Completed</div>
               </button>
-            </section>
+            </div>
 
-            <section className="mt-7 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.35)]">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-lg font-semibold">Lists</h2>
-                <button
-                  onClick={openCreateList}
-                  className="rounded-2xl bg-white/5 px-3 py-2 text-sm text-zinc-300 transition hover:bg-white/10"
-                >
+            <div style={styles.homePanel}>
+              <div style={styles.sectionRow}>
+                <h2 style={styles.sectionTitle}>Lists</h2>
+              </div>
+
+              <div style={styles.newListRow}>
+                <input
+                  style={styles.input}
+                  placeholder="New list name"
+                  value={newListName}
+                  onChange={(e) => setNewListName(e.target.value)}
+                />
+                <button style={styles.secondaryActionButton} onClick={createList}>
                   New List
                 </button>
               </div>
 
-              {lists.length === 0 ? (
-                <div className="rounded-3xl border border-dashed border-white/10 px-5 py-10 text-center">
-                  <div className="text-lg font-medium text-white">No Lists Yet</div>
-                  <div className="mt-2 text-sm text-zinc-400">
-                    Create your first list with the + button.
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {lists.map((list) => {
-                    const role = getRole(list)
-                    const openCount = tasks.filter(
-                      (t) => t.list_id === list.id && !t.completed
-                    ).length
-
-                    return (
-                      <div
-                        key={list.id}
-                        className="group relative flex items-center justify-between rounded-[22px] px-4 py-3 transition hover:bg-white/8 active:scale-[0.99]"
-                      >
-                        <button
-                          onClick={() => openList(list.id)}
-                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                        >
-                          <div className={cn('h-3 w-3 rounded-full', list.color || 'bg-sky-400')} />
-                          <div className="min-w-0">
-                            {editingListId === list.id ? (
-                              <input
-                                ref={editInputRef}
-                                value={editingListName}
-                                onChange={(e) => setEditingListName(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') saveListName(list.id)
-                                  if (e.key === 'Escape') cancelEditListName()
-                                }}
-                                onBlur={() => saveListName(list.id)}
-                                className="w-full rounded-xl bg-white/10 px-3 py-2 text-[17px] font-medium text-white outline-none ring-1 ring-white/15 focus:ring-white/30"
-                              />
-                            ) : (
-                              <>
-                                <div className="truncate text-[17px] font-medium text-white">
-                                  {list.name}
-                                </div>
-                                <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
-                                  {isShared(list) && <span>Shared</span>}
-                                  {isShared(list) && <span>•</span>}
-                                  <span className="capitalize">{role}</span>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </button>
-
-                        <div className="ml-3 flex items-center gap-3">
-                          {isShared(list) ? (
-                            <div className="hidden sm:flex -space-x-2">
-                              {(list.members || []).slice(0, 3).map((m) => (
-                                <div
-                                  key={m.user_id}
-                                  className="flex h-7 w-7 items-center justify-center rounded-full border border-[#0a0d14] bg-white/10 text-[10px] text-white"
-                                  title={m.profile?.email || 'Member'}
-                                >
-                                  {getInitials(m.profile?.email)}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-
-                          <button
-                            onClick={() => openList(list.id)}
-                            className="text-sm text-zinc-400"
-                          >
-                            {openCount}
-                          </button>
-
-                          <div className="relative">
-                            <button
-                              onClick={() =>
-                                setMenuListId((prev) => (prev === list.id ? null : list.id))
-                              }
-                              className="rounded-xl p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
-                            >
-                              ⋯
-                            </button>
-
-                            {menuListId === list.id && (
-                              <div className="absolute right-0 top-11 z-20 w-44 rounded-2xl border border-white/10 bg-[#0d1220]/95 p-2 shadow-2xl backdrop-blur-xl">
-                                <button
-                                  onClick={() => startEditListName(list)}
-                                  className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-white hover:bg-white/10"
-                                >
-                                  Edit Name
-                                </button>
-
-                                {role === 'owner' ? (
-                                  <button
-                                    onClick={() => deleteList(list.id)}
-                                    className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-red-300 hover:bg-red-500/10"
-                                  >
-                                    Delete List
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => leaveList(list.id)}
-                                    className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-red-300 hover:bg-red-500/10"
-                                  >
-                                    Leave List
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
+              <div style={{ marginTop: 14 }}>
+                {homeListRows.length === 0 ? (
+                  <div style={styles.empty}>No lists yet.</div>
+                ) : (
+                  homeListRows.map((list) => (
+                    <button
+                      key={list.id}
+                      style={styles.listRow}
+                      onClick={() => {
+                        setSelectedListId(list.id)
+                        setScreen('list')
+                      }}
+                    >
+                      <div>
+                        <div style={styles.listRowTitle}>{list.name}</div>
+                        <div style={styles.listRowMeta}>
+                          {list.owner_id === userId ? 'Owner' : 'Shared with you'}
                         </div>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
-            </section>
+                      <div style={styles.listRowCount}>{list.count}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
           </>
         ) : (
-          <section className="rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.35)]">
-            {viewMode === 'list' && selectedList ? (
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className={cn('h-3 w-3 rounded-full', selectedList.color || 'bg-sky-400')} />
-                  <div className="min-w-0">
-                    <div className="truncate text-lg font-semibold text-white">{selectedList.name}</div>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
-                      {(selectedList.members || []).slice(0, 4).map((m) => (
-                        <div
-                          key={m.user_id}
-                          className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-[10px] text-white"
-                          title={m.profile?.email || 'Member'}
-                        >
-                          {getInitials(m.profile?.email)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+          <>
+            <div style={styles.topBar}>
+              <button style={styles.iconCircle} onClick={goBackHome}>
+                ‹
+              </button>
 
-                <button
-                  onClick={() => openCreateTask(selectedList.id)}
-                  className="rounded-2xl bg-white/10 px-3 py-2 text-sm text-white transition hover:bg-white/15"
-                >
-                  Add Task
-                </button>
+              <div style={styles.topBarTitleWrap}>
+                <div style={styles.topBarSmall}>
+                  {screen === 'today'
+                    ? 'Today'
+                    : screen === 'all'
+                    ? 'All'
+                    : screen === 'completed'
+                    ? 'Completed'
+                    : 'List'}
+                </div>
+                <div style={styles.topBarTitle}>
+                  {screen === 'list' && selectedList
+                    ? selectedList.name
+                    : screen === 'today'
+                    ? 'Today'
+                    : screen === 'all'
+                    ? 'All'
+                    : 'Completed'}
+                </div>
+              </div>
+
+              <button style={styles.ghostButton} onClick={signOut}>
+                Sign out
+              </button>
+            </div>
+
+            {screen === 'list' && selectedList ? (
+              <div style={styles.detailActionRow}>
+                {isOwner ? (
+                  <>
+                    <button
+                      style={styles.smallDarkButton}
+                      onClick={() => startEditList(selectedList)}
+                    >
+                      Edit List Name
+                    </button>
+                    <button
+                      style={{
+                        ...styles.deleteListButton,
+                        ...(deletingList ? styles.disabledButton : {}),
+                      }}
+                      disabled={deletingList}
+                      onClick={deleteCurrentList}
+                    >
+                      {deletingList ? 'Deleting...' : 'Delete List'}
+                    </button>
+                  </>
+                ) : (
+                  <button style={styles.secondaryActionButton} onClick={leaveCurrentList}>
+                    Leave List
+                  </button>
+                )}
               </div>
             ) : null}
 
-            {visibleTasks.length === 0 ? (
-              <div className="rounded-3xl border border-dashed border-white/10 px-5 py-12 text-center">
-                <div className="text-lg font-medium text-white">
-                  {viewMode === 'completed' ? 'Nothing completed yet' : 'No Tasks'}
-                </div>
-                <div className="mt-2 text-sm text-zinc-400">
-                  {viewMode === 'completed'
-                    ? 'Completed tasks will appear here.'
-                    : 'Tap + to add your first task.'}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {visibleTasks.map((task) => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    list={listMap.get(task.list_id) || null}
-                    isCompletedScreen={viewMode === 'completed'}
-                    menuOpen={menuTaskId === task.id}
-                    onToggle={() => toggleTask(task.id, !task.completed)}
-                    onEdit={() => openEditTask(task)}
-                    onDelete={() => deleteTask(task.id)}
-                    onMenu={() => setMenuTaskId((prev) => (prev === task.id ? null : task.id))}
-                  />
-                ))}
-              </div>
-            )}
+            {screen === 'list' && selectedList ? (
+              <div style={styles.membersPanelDark}>
+                <h2 style={styles.membersTitle}>List Details</h2>
 
-            {viewMode === 'list' && selectedListId ? (
-              <div className="mt-5">
-                <button
-                  onClick={() => setShowCompleted((v) => !v)}
-                  className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-zinc-300 transition hover:bg-white/5"
-                >
-                  <span className="text-sm font-medium">
-                    Completed ({visibleCompletedForList.length})
-                  </span>
-                  <span className="text-xs text-zinc-500">{showCompleted ? 'Hide' : 'Show'}</span>
-                </button>
+                <div style={styles.detailBoxDark}>
+                  <div style={styles.detailLabelDark}>List name</div>
 
-                {showCompleted && visibleCompletedForList.length > 0 ? (
-                  <div className="mt-2 space-y-2">
-                    {visibleCompletedForList.map((task) => (
-                      <TaskRow
-                        key={task.id}
-                        task={task}
-                        list={listMap.get(task.list_id) || null}
-                        isCompletedScreen
-                        menuOpen={menuTaskId === task.id}
-                        onToggle={() => toggleTask(task.id, false)}
-                        onEdit={() => openEditTask(task)}
-                        onDelete={() => deleteTask(task.id)}
-                        onMenu={() =>
-                          setMenuTaskId((prev) => (prev === task.id ? null : task.id))
-                        }
+                  {editingListId === selectedList.id ? (
+                    <div style={styles.inlineEditWrap}>
+                      <input
+                        style={styles.inputDark}
+                        value={editListName}
+                        onChange={(e) => setEditListName(e.target.value)}
+                        placeholder="List name"
                       />
-                    ))}
+                      <div
+                        style={{
+                          ...styles.editButtonRow,
+                          ...(isMobile ? styles.editButtonRowMobile : {}),
+                          marginTop: 10,
+                        }}
+                      >
+                        <button style={styles.saveButton} onClick={saveEditList}>
+                          Save
+                        </button>
+                        <button style={styles.cancelButton} onClick={cancelEditList}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={styles.inlineDetailRow}>
+                      <div style={styles.detailValueDark}>{selectedList.name}</div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={styles.detailBoxDark}>
+                  <div style={styles.detailLabelDark}>Your role</div>
+                  <div style={styles.detailValueDark}>
+                    {currentUserMembership?.role || (isOwner ? 'owner' : 'member')}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div style={styles.groupWrap}>
+              {tasksByList.length === 0 ? (
+                <div style={styles.emptyDark}>Nothing here yet.</div>
+              ) : (
+                tasksByList.map(({ list, tasks: groupTasks }) => (
+                  <div key={list.id} style={styles.groupSection}>
+                    <div style={styles.groupTitle}>
+                      {screen === 'list' ? list.name : list.name}
+                    </div>
+
+                    {groupTasks.map((task) => {
+                      const isExpanded = expandedTaskId === task.id
+                      const isEditing = editingTaskId === task.id
+                      const overdue = isOverdue(task)
+
+                      return (
+                        <div key={task.id} style={styles.taskRowWrap}>
+                          <div
+                            style={styles.taskRow}
+                            onClick={() => toggleExpanded(task.id)}
+                          >
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleTask(task)
+                              }}
+                              style={{
+                                ...styles.circleButton,
+                                ...(task.is_complete ? styles.circleButtonChecked : {}),
+                              }}
+                            >
+                              {task.is_complete ? '✓' : ''}
+                            </button>
+
+                            <div style={styles.taskBody}>
+                              <div
+                                style={{
+                                  ...styles.taskTitle,
+                                  ...(task.is_complete ? styles.taskTitleDone : {}),
+                                }}
+                              >
+                                {task.title}
+                              </div>
+
+                              {task.notes ? <div style={styles.taskNotes}>{task.notes}</div> : null}
+
+                              {(task.due_date || task.reminder_minutes != null) ? (
+                                <div
+                                  style={{
+                                    ...styles.taskMeta,
+                                    ...(overdue ? styles.taskMetaOverdue : {}),
+                                  }}
+                                >
+                                  {task.due_date
+                                    ? formatTaskDate(task.due_date, task.due_time)
+                                    : 'No due date'}
+                                  {task.reminder_minutes != null ? ` • ${formatReminder(task.reminder_minutes)}` : ''}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          {isExpanded ? (
+                            <div style={styles.expandedArea}>
+                              {isEditing ? (
+                                <div style={styles.editGrid}>
+                                  <input
+                                    style={styles.inputDark}
+                                    value={editTitle}
+                                    onChange={(e) => setEditTitle(e.target.value)}
+                                    placeholder="Title"
+                                  />
+                                  <textarea
+                                    style={styles.textareaDark}
+                                    value={editNotes}
+                                    onChange={(e) => setEditNotes(e.target.value)}
+                                    placeholder="Notes"
+                                  />
+
+                                  <div style={styles.appleRow}>
+                                    <div style={styles.appleRowLeft}>
+                                      <div style={styles.appleIcon}>🗓️</div>
+                                      <div style={styles.appleLabel}>Date</div>
+                                    </div>
+
+                                    <label style={styles.switch}>
+                                      <input
+                                        type="checkbox"
+                                        checked={editDateEnabled}
+                                        onChange={(e) => setEditDateEnabled(e.target.checked)}
+                                        style={{ display: 'none' }}
+                                      />
+                                      <span
+                                        style={{
+                                          ...styles.slider,
+                                          background: editDateEnabled ? '#34c759' : '#6b7280',
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            position: 'absolute',
+                                            top: 3,
+                                            left: editDateEnabled ? 27 : 3,
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: '50%',
+                                            background: '#ffffff',
+                                            transition: 'left 0.18s ease',
+                                            boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                                          }}
+                                        />
+                                      </span>
+                                    </label>
+                                  </div>
+
+                                  {editDateEnabled ? (
+                                    <div style={styles.dateInputWrap}>
+                                      <input
+                                        style={styles.inputDark}
+                                        type="date"
+                                        value={editDueDate}
+                                        onChange={(e) => setEditDueDate(e.target.value)}
+                                      />
+                                      <span style={styles.dateIcon}>🗓️</span>
+                                    </div>
+                                  ) : null}
+
+                                  <div style={styles.appleRow}>
+                                    <div style={styles.appleRowLeft}>
+                                      <div style={styles.appleIcon}>🕒</div>
+                                      <div style={styles.appleLabel}>Time</div>
+                                    </div>
+
+                                    <label style={styles.switch}>
+                                      <input
+                                        type="checkbox"
+                                        checked={editTimeEnabled}
+                                        onChange={(e) => setEditTimeEnabled(e.target.checked)}
+                                        style={{ display: 'none' }}
+                                      />
+                                      <span
+                                        style={{
+                                          ...styles.slider,
+                                          background: editTimeEnabled ? '#34c759' : '#6b7280',
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            position: 'absolute',
+                                            top: 3,
+                                            left: editTimeEnabled ? 27 : 3,
+                                            width: 28,
+                                            height: 28,
+                                            borderRadius: '50%',
+                                            background: '#ffffff',
+                                            transition: 'left 0.18s ease',
+                                            boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                                          }}
+                                        />
+                                      </span>
+                                    </label>
+                                  </div>
+
+                                  {editDateEnabled && editTimeEnabled ? (
+                                    <input
+                                      style={styles.inputDark}
+                                      type="time"
+                                      value={editDueTime}
+                                      onChange={(e) => setEditDueTime(e.target.value)}
+                                    />
+                                  ) : null}
+
+                                  {editDateEnabled ? (
+                                    <select
+                                      style={styles.selectDark}
+                                      value={editReminder}
+                                      onChange={(e) => setEditReminder(e.target.value)}
+                                    >
+                                      <option value="0">At time</option>
+                                      <option value="5">5 min before</option>
+                                      <option value="10">10 min before</option>
+                                      <option value="15">15 min before</option>
+                                      <option value="30">30 min before</option>
+                                      <option value="60">1 hour before</option>
+                                      <option value="120">2 hours before</option>
+                                      <option value="1440">1 day before</option>
+                                      <option value="2880">2 days before</option>
+                                      <option value="10080">1 week before</option>
+                                    </select>
+                                  ) : null}
+
+                                  <select
+                                    style={styles.selectDark}
+                                    value={editPriority}
+                                    onChange={(e) => setEditPriority(e.target.value)}
+                                  >
+                                    <option value="low">Low</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                  </select>
+
+                                  <div
+                                    style={{
+                                      ...styles.editButtonRow,
+                                      ...(isMobile ? styles.editButtonRowMobile : {}),
+                                    }}
+                                  >
+                                    <button style={styles.saveButton} onClick={() => saveEdit(task.id)}>
+                                      Save
+                                    </button>
+                                    <button style={styles.cancelButton} onClick={cancelEdit}>
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={styles.expandedButtons}>
+                                  <button style={styles.smallDarkButton} onClick={() => startEdit(task)}>
+                                    Edit
+                                  </button>
+                                  <button style={styles.smallDeleteButton} onClick={() => deleteTask(task.id)}>
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {screen === 'list' && selectedList ? (
+              <div style={styles.membersPanelDark}>
+                <h2 style={styles.membersTitle}>Members</h2>
+
+                {isOwner ? (
+                  <div
+                    style={{
+                      ...styles.inviteRowDark,
+                      ...(isMobile ? styles.inviteRowDarkMobile : {}),
+                    }}
+                  >
+                    <input
+                      style={styles.inputDark}
+                      placeholder="Invite by email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                    />
+                    <button style={styles.secondaryActionButton} onClick={inviteMember}>
+                      Invite
+                    </button>
                   </div>
                 ) : null}
+
+                <div style={{ marginTop: 12 }}>
+                  {members.map((member) => (
+                    <div key={member.id} style={styles.memberRowDark}>
+                      <div>
+                        <div style={styles.memberEmailDark}>
+                          {member.profiles?.email || member.user_id}
+                        </div>
+                        <div style={styles.memberRoleDark}>{member.role}</div>
+                      </div>
+
+                      {isOwner && member.role !== 'owner' ? (
+                        <button style={styles.smallDeleteButton} onClick={() => removeMember(member)}>
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
-          </section>
+          </>
         )}
-      </div>
 
-      <button
-        onClick={() => setShowQuickSheet(true)}
-        className="fixed bottom-7 right-7 z-30 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-b from-sky-400 to-sky-500 text-4xl font-light text-white shadow-[0_20px_50px_rgba(14,165,233,0.35)] transition hover:scale-[1.03] active:scale-[0.97]"
-        aria-label="Create"
-      >
-        +
-      </button>
+        <button style={styles.fab} onClick={() => openCreateModal()}>
+          +
+        </button>
 
-      {showQuickSheet && (
-        <div
-          className="fixed inset-0 z-40 bg-black/45 backdrop-blur-md"
-          onClick={() => setShowQuickSheet(false)}
-        >
-          <div
-            className="absolute bottom-28 right-6 w-56 rounded-3xl border border-white/10 bg-[#0d1220]/95 p-2 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={() => {
-                setShowQuickSheet(false)
-                openCreateTask()
-              }}
-              className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-white transition hover:bg-white/10"
-            >
-              <span className="text-lg">✓</span>
-              <span>New Task</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setShowQuickSheet(false)
-                openCreateList()
-              }}
-              className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-white transition hover:bg-white/10"
-            >
-              <span className="text-lg">≡</span>
-              <span>New List</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {showTaskModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 backdrop-blur-md sm:items-center"
-          onClick={() => setShowTaskModal(false)}
-        >
-          <div
-            className="w-full max-w-xl rounded-t-[28px] border border-white/10 bg-[#0d1220]/95 p-5 shadow-2xl sm:rounded-[28px]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-xl font-semibold text-white">
-                {editingTask ? 'Edit Task' : 'New Task'}
-              </h3>
-              <button
-                onClick={() => setShowTaskModal(false)}
-                className="rounded-xl p-2 text-zinc-400 hover:bg-white/10 hover:text-white"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div className="rounded-[26px] border border-white/10 bg-white/5 p-4">
-                <label className="mb-2 block text-sm text-zinc-400">Title</label>
-                <input
-                  ref={taskTitleRef}
-                  value={taskForm.title}
-                  onChange={(e) => setTaskForm((s) => ({ ...s, title: e.target.value }))}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && taskForm.title.trim()) saveTask()
-                  }}
-                  placeholder="New Task"
-                  className="w-full bg-transparent text-xl font-medium text-white outline-none placeholder:text-zinc-500"
-                />
+        {showCreateModal ? (
+          <div style={styles.modalOverlay} onClick={() => setShowCreateModal(false)}>
+            <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+              <div style={styles.modalHeader}>
+                <button
+                  style={styles.iconCircle}
+                  onClick={() => setShowCreateModal(false)}
+                >
+                  ✕
+                </button>
+                <div style={styles.modalTitle}>New Reminder</div>
+                <button style={styles.iconCircle} onClick={addTask}>
+                  ✓
+                </button>
               </div>
 
-              <div className="rounded-[26px] border border-white/10 bg-white/5 p-4">
-                <label className="mb-2 block text-sm text-zinc-400">Notes</label>
-                <textarea
-                  value={taskForm.notes}
-                  onChange={(e) => setTaskForm((s) => ({ ...s, notes: e.target.value }))}
-                  placeholder="Add notes"
-                  rows={3}
-                  className="w-full resize-none bg-transparent text-base text-white outline-none placeholder:text-zinc-500"
-                />
+              <div style={styles.modalSection}>
+                <div style={styles.modalFieldStack}>
+                  <input
+                    style={styles.inputDark}
+                    placeholder="Title"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                  />
+                  <textarea
+                    style={styles.textareaDark}
+                    placeholder="Notes"
+                    value={newTaskNotes}
+                    onChange={(e) => setNewTaskNotes(e.target.value)}
+                  />
+                </div>
               </div>
 
-              <div className="rounded-[26px] border border-white/10 bg-white/5 p-4">
-                <div className="mb-3 text-sm font-medium text-zinc-300">When</div>
+              <div style={styles.modalSection}>
+                <div style={styles.sectionHeading}>Date & Time</div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-                    <label className="mb-1 block text-xs text-zinc-500">Date</label>
+                <div style={styles.appleRow}>
+                  <div style={styles.appleRowLeft}>
+                    <div style={styles.appleIcon}>🗓️</div>
+                    <div style={styles.appleLabel}>Date</div>
+                  </div>
+
+                  <label style={styles.switch}>
                     <input
+                      type="checkbox"
+                      checked={newTaskDateEnabled}
+                      onChange={(e) => setNewTaskDateEnabled(e.target.checked)}
+                      style={{ display: 'none' }}
+                    />
+                    <span
+                      style={{
+                        ...styles.slider,
+                        background: newTaskDateEnabled ? '#34c759' : '#6b7280',
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: 3,
+                          left: newTaskDateEnabled ? 27 : 3,
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          background: '#ffffff',
+                          transition: 'left 0.18s ease',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                        }}
+                      />
+                    </span>
+                  </label>
+                </div>
+
+                {newTaskDateEnabled ? (
+                  <div style={styles.dateInputWrap}>
+                    <input
+                      style={styles.inputDark}
                       type="date"
-                      value={taskForm.due_date}
-                      onChange={(e) => setTaskForm((s) => ({ ...s, due_date: e.target.value }))}
-                      className="w-full bg-transparent text-base text-white outline-none"
+                      value={newTaskDueDate}
+                      onChange={(e) => setNewTaskDueDate(e.target.value)}
                     />
+                    <span style={styles.dateIcon}>🗓️</span>
+                  </div>
+                ) : null}
+
+                <div style={styles.appleRow}>
+                  <div style={styles.appleRowLeft}>
+                    <div style={styles.appleIcon}>🕒</div>
+                    <div style={styles.appleLabel}>Time</div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => timeInputRef.current?.showPicker?.() || timeInputRef.current?.click()}
-                    className="relative rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:bg-white/[0.06]"
-                  >
-                    <div className="mb-1 text-xs text-zinc-500">Time</div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-base text-white">
-                        {formatTimeValue(taskForm.due_time)}
-                      </span>
-                      <span className="rounded-full bg-sky-400/15 px-3 py-1 text-sm text-sky-300">
-                        {taskForm.due_time ? formatTimeValue(taskForm.due_time) : 'Select'}
-                      </span>
-                    </div>
-
+                  <label style={styles.switch}>
                     <input
-                      ref={timeInputRef}
-                      type="time"
-                      value={taskForm.due_time}
-                      onChange={(e) => setTaskForm((s) => ({ ...s, due_time: e.target.value }))}
-                      className="absolute inset-0 cursor-pointer opacity-0"
+                      type="checkbox"
+                      checked={newTaskTimeEnabled}
+                      onChange={(e) => setNewTaskTimeEnabled(e.target.checked)}
+                      style={{ display: 'none' }}
                     />
-                  </button>
+                    <span
+                      style={{
+                        ...styles.slider,
+                        background: newTaskTimeEnabled ? '#34c759' : '#6b7280',
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: 3,
+                          left: newTaskTimeEnabled ? 27 : 3,
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          background: '#ffffff',
+                          transition: 'left 0.18s ease',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+                        }}
+                      />
+                    </span>
+                  </label>
                 </div>
+
+                {newTaskDateEnabled && newTaskTimeEnabled ? (
+                  <input
+                    style={styles.inputDark}
+                    type="time"
+                    value={newTaskDueTime}
+                    onChange={(e) => setNewTaskDueTime(e.target.value)}
+                  />
+                ) : null}
               </div>
 
-              <div className="rounded-[26px] border border-white/10 bg-white/5 p-4">
-                <div className="mb-3 text-sm font-medium text-zinc-300">More Options</div>
+              <div style={styles.modalSection}>
+                <div style={styles.sectionHeading}>More Options</div>
 
-                <div className="space-y-3">
-                  <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-                    <label className="mb-2 block text-xs text-zinc-500">List</label>
-                    <select
-                      value={taskForm.list_id}
-                      onChange={(e) => setTaskForm((s) => ({ ...s, list_id: e.target.value }))}
-                      className="w-full bg-transparent text-base text-white outline-none"
-                    >
-                      {lists.map((list) => (
-                        <option key={list.id} value={list.id} className="bg-[#0d1220]">
-                          {list.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-                    <label className="mb-2 block text-xs text-zinc-500">Reminder</label>
-                    <select
-                      value={taskForm.reminder_minutes}
-                      onChange={(e) =>
-                        setTaskForm((s) => ({ ...s, reminder_minutes: e.target.value }))
-                      }
-                      className="w-full bg-transparent text-base text-white outline-none"
-                    >
-                      {REMINDER_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value} className="bg-[#0d1220]">
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-                    <div className="mb-3 text-xs text-zinc-500">Priority</div>
-                    <div className="grid grid-cols-3 gap-2">
-                      {PRIORITIES.map((opt) => (
-                        <button
-                          key={opt.value}
-                          onClick={() =>
-                            setTaskForm((s) => ({
-                              ...s,
-                              priority: opt.value,
-                            }))
-                          }
-                          className={cn(
-                            'rounded-2xl px-3 py-2 text-sm transition',
-                            taskForm.priority === opt.value
-                              ? 'bg-white/16 text-white ring-1 ring-white/20'
-                              : 'bg-white/5 text-zinc-400 hover:bg-white/10 hover:text-white'
-                          )}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-1">
-                <button
-                  onClick={() => setShowTaskModal(false)}
-                  className="rounded-2xl px-4 py-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
+                <select
+                  style={styles.selectDark}
+                  value={newTaskListId}
+                  onChange={(e) => setNewTaskListId(e.target.value)}
                 >
-                  Cancel
-                </button>
+                  {lists.map((list) => (
+                    <option key={list.id} value={list.id}>
+                      {list.name}
+                    </option>
+                  ))}
+                </select>
 
-                <button
-                  disabled={!taskForm.title.trim()}
-                  onClick={saveTask}
-                  className={cn(
-                    'rounded-2xl px-5 py-2 font-medium transition',
-                    taskForm.title.trim()
-                      ? 'bg-sky-400 text-white hover:brightness-110 active:scale-[0.98]'
-                      : 'cursor-not-allowed bg-white/10 text-zinc-500'
-                  )}
+                {newTaskDateEnabled ? (
+                  <select
+                    style={styles.selectDark}
+                    value={newTaskReminder}
+                    onChange={(e) => setNewTaskReminder(e.target.value)}
+                  >
+                    <option value="0">Reminder: At time</option>
+                    <option value="5">Reminder: 5 min before</option>
+                    <option value="10">Reminder: 10 min before</option>
+                    <option value="15">Reminder: 15 min before</option>
+                    <option value="30">Reminder: 30 min before</option>
+                    <option value="60">Reminder: 1 hour before</option>
+                    <option value="120">Reminder: 2 hours before</option>
+                    <option value="1440">Reminder: 1 day before</option>
+                    <option value="2880">Reminder: 2 days before</option>
+                    <option value="10080">Reminder: 1 week before</option>
+                  </select>
+                ) : null}
+
+                <select
+                  style={styles.selectDark}
+                  value={newTaskPriority}
+                  onChange={(e) => setNewTaskPriority(e.target.value)}
                 >
-                  {editingTask ? 'Save' : 'Add'}
-                </button>
+                  <option value="low">Priority: Low</option>
+                  <option value="medium">Priority: Medium</option>
+                  <option value="high">Priority: High</option>
+                </select>
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {showListModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 backdrop-blur-md sm:items-center"
-          onClick={() => setShowListModal(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-t-[28px] border border-white/10 bg-[#0d1220]/95 p-5 shadow-2xl sm:rounded-[28px]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-xl font-semibold text-white">New List</h3>
-              <button
-                onClick={() => setShowListModal(false)}
-                className="rounded-xl p-2 text-zinc-400 hover:bg-white/10 hover:text-white"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="rounded-[26px] border border-white/10 bg-white/5 p-4">
-              <label className="mb-2 block text-sm text-zinc-400">List Name</label>
-              <input
-                ref={listTitleRef}
-                value={listFormName}
-                onChange={(e) => setListFormName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && listFormName.trim()) saveList()
-                }}
-                placeholder="My Tasks"
-                className="w-full bg-transparent text-xl font-medium text-white outline-none placeholder:text-zinc-500"
-              />
-            </div>
-
-            <div className="mt-4 flex items-center justify-end gap-3">
-              <button
-                onClick={() => setShowListModal(false)}
-                className="rounded-2xl px-4 py-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
-              >
-                Cancel
-              </button>
-
-              <button
-                disabled={!listFormName.trim()}
-                onClick={saveList}
-                className={cn(
-                  'rounded-2xl px-5 py-2 font-medium transition',
-                  listFormName.trim()
-                    ? 'bg-sky-400 text-white hover:brightness-110 active:scale-[0.98]'
-                    : 'cursor-not-allowed bg-white/10 text-zinc-500'
-                )}
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {toast && (
-        <div className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-2xl border border-white/10 bg-[#0d1220]/95 px-4 py-3 text-sm text-white shadow-2xl backdrop-blur-xl">
-          {toast}
-        </div>
-      )}
+        ) : null}
+      </div>
     </main>
   )
 }
 
-function TaskRow({
-  task,
-  list,
-  isCompletedScreen,
-  menuOpen,
-  onToggle,
-  onEdit,
-  onDelete,
-  onMenu,
-}: {
-  task: Task
-  list: TaskList | null
-  isCompletedScreen?: boolean
-  menuOpen: boolean
-  onToggle: () => void
-  onEdit: () => void
-  onDelete: () => void
-  onMenu: () => void
-}) {
-  return (
-    <div className="group relative flex items-start gap-3 rounded-[22px] px-4 py-3 transition hover:bg-white/5">
-      <button
-        onClick={onToggle}
-        className={cn(
-          'mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition',
-          task.completed
-            ? 'border-emerald-400 bg-emerald-400 text-[#08120d]'
-            : 'border-white/25 hover:border-white/45'
-        )}
-      >
-        {task.completed ? '✓' : ''}
-      </button>
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    minHeight: '100vh',
+    background: '#000',
+    color: '#fff',
+    fontFamily: 'Arial, sans-serif',
+    padding: '20px 16px 90px',
+  },
+  container: {
+    maxWidth: 820,
+    margin: '0 auto',
+  },
+  homeHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 20,
+  },
+  appTitle: {
+    fontSize: 34,
+    fontWeight: 700,
+    margin: 0,
+    color: '#fff',
+  },
+  topBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 16,
+  },
+  topBarTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  topBarSmall: {
+    color: '#6b7280',
+    fontSize: 18,
+    fontWeight: 700,
+    marginBottom: 4,
+  },
+  topBarTitle: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: 700,
+    lineHeight: 1.1,
+    wordBreak: 'break-word',
+  },
+  subtle: {
+    color: '#9ca3af',
+    fontSize: 14,
+    marginTop: 6,
+    wordBreak: 'break-word',
+  },
 
-      <button onClick={onEdit} className="min-w-0 flex-1 text-left">
-        <div
-          className={cn(
-            'truncate text-[15px]',
-            task.completed ? 'text-zinc-500 line-through' : 'text-white'
-          )}
-        >
-          {task.title}
-        </div>
+  success: {
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 12,
+    background: '#052e16',
+    color: '#86efac',
+    fontWeight: 600,
+  },
+  error: {
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 12,
+    background: '#3f1111',
+    color: '#fca5a5',
+    fontWeight: 600,
+  },
 
-        {task.notes ? (
-          <div className="mt-1 line-clamp-1 text-sm text-zinc-400">{task.notes}</div>
-        ) : null}
+  cardGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    gap: 14,
+    marginBottom: 20,
+  },
+  cardGridMobile: {
+    gridTemplateColumns: '1fr 1fr',
+  },
+  statCard: {
+    border: 'none',
+    borderRadius: 22,
+    padding: '18px 18px',
+    color: '#fff',
+    textAlign: 'left',
+    minHeight: 118,
+    cursor: 'pointer',
+  },
+  statCount: {
+    fontSize: 42,
+    fontWeight: 700,
+    lineHeight: 1,
+    marginBottom: 14,
+  },
+  statLabel: {
+    fontSize: 18,
+    fontWeight: 700,
+  },
+  todayCard: {
+    background: 'linear-gradient(135deg, #89b9ff, #5f88f7)',
+  },
+  allCard: {
+    background: 'linear-gradient(135deg, #3d3d3d, #1e1e1e)',
+  },
+  completedCard: {
+    background: 'linear-gradient(135deg, #a9afb9, #8d949f)',
+  },
 
-        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-          {formatDue(task) ? <span>{formatDue(task)}</span> : null}
-          {list ? (
-            <>
-              {formatDue(task) ? <span>•</span> : null}
-              <span>{list.name}</span>
-            </>
-          ) : null}
-          {task.priority ? (
-            <>
-              <span>•</span>
-              <span className="capitalize">{task.priority}</span>
-            </>
-          ) : null}
-          {isCompletedScreen && task.completed_at ? (
-            <>
-              <span>•</span>
-              <span>
-                Completed{' '}
-                {new Date(task.completed_at).toLocaleDateString([], {
-                  month: 'short',
-                  day: 'numeric',
-                })}
-              </span>
-            </>
-          ) : null}
-        </div>
-      </button>
+  homePanel: {
+    background: '#121317',
+    borderRadius: 24,
+    padding: 18,
+    border: '1px solid #22252c',
+  },
+  sectionRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    margin: 0,
+    fontSize: 18,
+    fontWeight: 700,
+    color: '#fff',
+  },
+  newListRow: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto',
+    gap: 10,
+  },
+  listRow: {
+    width: '100%',
+    background: '#1a1c22',
+    color: '#fff',
+    border: '1px solid #2a2e37',
+    borderRadius: 18,
+    padding: '16px 18px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    cursor: 'pointer',
+    textAlign: 'left',
+    marginBottom: 10,
+  },
+  listRowTitle: {
+    fontSize: 18,
+    fontWeight: 700,
+    marginBottom: 4,
+  },
+  listRowMeta: {
+    color: '#9ca3af',
+    fontSize: 13,
+  },
+  listRowCount: {
+    fontSize: 34,
+    fontWeight: 700,
+    color: '#9db8ff',
+    marginLeft: 14,
+  },
 
-      <div className="relative">
-        <button
-          onClick={onMenu}
-          className="rounded-xl p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
-        >
-          ⋯
-        </button>
+  groupWrap: {
+    marginTop: 8,
+  },
+  groupSection: {
+    marginBottom: 22,
+  },
+  groupTitle: {
+    fontSize: 19,
+    fontWeight: 700,
+    color: '#60a5fa',
+    marginBottom: 10,
+    paddingLeft: 2,
+  },
+  emptyDark: {
+    color: '#9ca3af',
+    padding: '12px 2px',
+    fontSize: 15,
+  },
 
-        {menuOpen && (
-          <div className="absolute right-0 top-11 z-20 w-40 rounded-2xl border border-white/10 bg-[#0d1220]/95 p-2 shadow-2xl backdrop-blur-xl">
-            <button
-              onClick={onEdit}
-              className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-white hover:bg-white/10"
-            >
-              Edit
-            </button>
-            <button
-              onClick={onDelete}
-              className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-red-300 hover:bg-red-500/10"
-            >
-              Delete
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
+  taskRowWrap: {
+    borderBottom: '1px solid #1f2430',
+    paddingBottom: 8,
+    marginBottom: 8,
+  },
+  taskRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: '10px 2px',
+    cursor: 'pointer',
+  },
+  circleButton: {
+    width: 28,
+    height: 28,
+    minWidth: 28,
+    borderRadius: '50%',
+    border: '2px solid #404552',
+    background: 'transparent',
+    color: '#fff',
+    fontWeight: 700,
+    cursor: 'pointer',
+    lineHeight: '22px',
+    textAlign: 'center',
+    padding: 0,
+    marginTop: 2,
+  },
+  circleButtonChecked: {
+    background: '#4f8cff',
+    borderColor: '#4f8cff',
+  },
+  taskBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  taskTitle: {
+    fontSize: 17,
+    lineHeight: 1.3,
+    color: '#fff',
+    fontWeight: 500,
+    wordBreak: 'break-word',
+  },
+  taskTitleDone: {
+    textDecoration: 'line-through',
+    color: '#808691',
+  },
+  taskNotes: {
+    fontSize: 14,
+    color: '#9ca3af',
+    marginTop: 4,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
+  taskMeta: {
+    fontSize: 14,
+    color: '#8b92a0',
+    marginTop: 4,
+  },
+  taskMetaOverdue: {
+    color: '#f87171',
+  },
+
+  expandedArea: {
+    padding: '10px 0 2px 40px',
+  },
+  expandedButtons: {
+    display: 'flex',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+
+  editGrid: {
+    display: 'grid',
+    gap: 10,
+  },
+  editButtonRow: {
+    display: 'flex',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  editButtonRowMobile: {
+    flexDirection: 'column',
+  },
+
+  membersPanelDark: {
+    marginTop: 18,
+    background: '#121317',
+    border: '1px solid #22252c',
+    borderRadius: 24,
+    padding: 18,
+  },
+  membersTitle: {
+    fontSize: 18,
+    fontWeight: 700,
+    color: '#fff',
+    margin: 0,
+  },
+  inviteRowDark: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto',
+    gap: 10,
+    marginTop: 14,
+  },
+  inviteRowDarkMobile: {
+    gridTemplateColumns: '1fr',
+  },
+  memberRowDark: {
+    padding: '14px 0',
+    borderBottom: '1px solid #1f2430',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  memberEmailDark: {
+    color: '#fff',
+    fontWeight: 600,
+    fontSize: 15,
+  },
+  memberRoleDark: {
+    color: '#9ca3af',
+    fontSize: 13,
+    marginTop: 4,
+  },
+
+  detailActionRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: 10,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  detailBoxDark: {
+    border: '1px solid #262b36',
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 10,
+    background: '#181b22',
+  },
+  detailLabelDark: {
+    fontSize: 12,
+    color: '#8b93a1',
+    marginBottom: 6,
+  },
+  detailValueDark: {
+    fontSize: 18,
+    fontWeight: 700,
+    color: '#ffffff',
+  },
+  inlineDetailRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  inlineEditWrap: {
+    marginTop: 6,
+  },
+
+  input: {
+    width: '100%',
+    padding: '14px 16px',
+    borderRadius: 16,
+    border: '1px solid #313642',
+    background: '#1b1d24',
+    color: '#fff',
+    fontSize: 16,
+    outline: 'none',
+  },
+  inputDark: {
+    width: '100%',
+    padding: '16px 18px',
+    borderRadius: 18,
+    border: '1px solid #3a4150',
+    background: '#1d212b',
+    color: '#ffffff',
+    fontSize: 17,
+    outline: 'none',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+  },
+  textareaDark: {
+    width: '100%',
+    minHeight: 120,
+    padding: '16px 18px',
+    borderRadius: 18,
+    border: '1px solid #3a4150',
+    background: '#1d212b',
+    color: '#ffffff',
+    fontSize: 17,
+    outline: 'none',
+    resize: 'vertical',
+    fontFamily: 'Arial, sans-serif',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+  },
+  selectDark: {
+    width: '100%',
+    padding: '16px 18px',
+    borderRadius: 18,
+    border: '1px solid #3a4150',
+    background: '#1d212b',
+    color: '#ffffff',
+    fontSize: 17,
+    outline: 'none',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)',
+  },
+
+  ghostButton: {
+    padding: '10px 14px',
+    borderRadius: 14,
+    border: '1px solid #343a46',
+    background: '#171a21',
+    color: '#ffffff',
+    cursor: 'pointer',
+    fontWeight: 600,
+    height: 'fit-content',
+  },
+  secondaryActionButton: {
+    padding: '12px 16px',
+    borderRadius: 16,
+    border: 'none',
+    background: '#2a2d36',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+  deleteListButton: {
+    padding: '12px 16px',
+    borderRadius: 16,
+    border: 'none',
+    background: '#dc2626',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+  saveButton: {
+    padding: '12px 16px',
+    borderRadius: 16,
+    border: 'none',
+    background: '#4f8cff',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+  cancelButton: {
+    padding: '12px 16px',
+    borderRadius: 16,
+    border: 'none',
+    background: '#2a2d36',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+  smallDarkButton: {
+    padding: '10px 14px',
+    borderRadius: 12,
+    border: '1px solid #3b4250',
+    background: '#1f2430',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 600,
+  },
+  smallDeleteButton: {
+    padding: '10px 14px',
+    borderRadius: 12,
+    border: 'none',
+    background: '#dc2626',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 600,
+  },
+  disabledButton: {
+    opacity: 0.6,
+    cursor: 'not-allowed',
+  },
+
+  fab: {
+    position: 'fixed',
+    right: 22,
+    bottom: 22,
+    width: 64,
+    height: 64,
+    borderRadius: '50%',
+    border: 'none',
+    background: '#79a7ff',
+    color: '#fff',
+    fontSize: 38,
+    lineHeight: '64px',
+    textAlign: 'center',
+    cursor: 'pointer',
+    boxShadow: '0 12px 30px rgba(121,167,255,0.35)',
+  },
+
+  modalOverlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.72)',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+    zIndex: 50,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 560,
+    background: '#111318',
+    border: '1px solid #2d3340',
+    borderRadius: 28,
+    padding: 18,
+    boxShadow: '0 24px 80px rgba(0,0,0,0.55)',
+  },
+  modalHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+  },
+  modalTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: 700,
+  },
+  iconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: '50%',
+    border: '1px solid #4b5563',
+    background: 'linear-gradient(180deg, #3a3f4a, #2d313b)',
+    color: '#ffffff',
+    cursor: 'pointer',
+    fontSize: 28,
+    lineHeight: '52px',
+    textAlign: 'center',
+    padding: 0,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+  },
+  modalSection: {
+    background: '#181b22',
+    borderRadius: 24,
+    padding: 18,
+    marginTop: 14,
+    display: 'grid',
+    gap: 14,
+    border: '1px solid #262b36',
+  },
+  modalFieldStack: {
+    display: 'grid',
+    gap: 12,
+  },
+  sectionHeading: {
+    color: '#d1d5db',
+    fontSize: 17,
+    fontWeight: 700,
+    marginBottom: 2,
+  },
+
+  appleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 14,
+    padding: '10px 0',
+    borderBottom: '1px solid #2a2f39',
+  },
+  appleRowLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 14,
+    minWidth: 0,
+  },
+  appleIcon: {
+    width: 28,
+    textAlign: 'center',
+    color: '#a1a1aa',
+    fontSize: 20,
+    flexShrink: 0,
+  },
+  appleLabel: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: 500,
+  },
+
+  toggleRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    color: '#ffffff',
+    fontSize: 17,
+    padding: '8px 0',
+    borderBottom: '1px solid #2a2f39',
+  },
+  switch: {
+    position: 'relative',
+    display: 'inline-block',
+    width: 58,
+    height: 34,
+  },
+  slider: {
+    position: 'absolute',
+    inset: 0,
+    background: '#6b7280',
+    borderRadius: 999,
+    boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)',
+  },
+
+  dateInputWrap: {
+    position: 'relative',
+  },
+  dateIcon: {
+    position: 'absolute',
+    right: 16,
+    top: '50%',
+    transform: 'translateY(-50%)',
+    color: '#9ca3af',
+    fontSize: 18,
+    pointerEvents: 'none',
+  },
+
+  loadingWrap: {
+    minHeight: '60vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#fff',
+    fontSize: 18,
+  },
+
+  empty: {
+    color: '#9ca3af',
+    padding: '8px 0',
+  },
 }
