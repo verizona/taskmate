@@ -104,7 +104,7 @@ export default function Home() {
           <img
             src="/taskmate_login_logo.png"
             alt="TaskMate"
-            className="h-24 w-auto mx-auto mb-4"
+            className="h-96 w-auto mx-auto mb-6"
           />
           <p className="mt-3 text-base text-zinc-400">
             Shared tasks. Simple teamwork.
