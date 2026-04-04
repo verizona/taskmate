@@ -12,7 +12,7 @@ export default function Home() {
 
   useEffect(() => {
     checkSession();
-  }, []); 
+  }, []);
 
   async function checkSession() {
     const {
@@ -92,30 +92,33 @@ export default function Home() {
   if (checkingSession) {
     return (
       <main className="min-h-screen bg-black text-white flex items-center justify-center px-6">
-        <div className="text-lg text-zinc-300">Loading...</div>
+        <div className="text-lg text-zinc-300 animate-pulse">Loading TaskMate...</div>
       </main>
     );
   }
 
   return (
     <main className="min-h-screen bg-black text-white px-6 py-10">
-      <div className="mx-auto max-w-md pt-10">
+      <div className="mx-auto max-w-md pt-8">
         <div className="mb-8 text-center">
-          <img
-            src="/taskmate_login_logo.png"
-            alt="TaskMate"
-            className="h-120 w-auto mx-auto mb-6"
-          />
+          <div className="mb-6 flex justify-center">
+            <img
+              src="/taskmate_login_logo.png"
+              alt="TaskMate"
+              className="w-full max-w-[280px] h-auto"
+            />
+          </div>
+
           <p className="mt-3 text-base text-zinc-400">
             Shared tasks. Simple teamwork.
           </p>
         </div>
 
-        <div className="rounded-3xl border border-zinc-800 bg-zinc-950/80 p-5 shadow-2xl shadow-black/40">
+        <div className="rounded-[28px] border border-zinc-800 bg-zinc-950/90 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.45)] backdrop-blur">
           <button
             onClick={signInWithGoogle}
             disabled={loading}
-            className="w-full rounded-2xl border border-zinc-700 bg-white px-4 py-4 text-base font-semibold text-black transition hover:opacity-95 disabled:opacity-60"
+            className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-4 text-base font-semibold text-black transition hover:scale-[0.995] hover:opacity-95 active:scale-[0.985] disabled:opacity-60"
           >
             {loading ? 'Please wait...' : 'Continue with Google'}
           </button>
@@ -133,7 +136,7 @@ export default function Home() {
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-4 text-white outline-none placeholder:text-zinc-500 focus:border-zinc-600"
+              className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-4 text-white outline-none placeholder:text-zinc-500 transition focus:border-zinc-600 focus:bg-zinc-900/90"
             />
 
             <input
@@ -142,13 +145,13 @@ export default function Home() {
               autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-4 text-white outline-none placeholder:text-zinc-500 focus:border-zinc-600"
+              className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-4 text-white outline-none placeholder:text-zinc-500 transition focus:border-zinc-600 focus:bg-zinc-900/90"
             />
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-2xl bg-zinc-200 px-4 py-4 text-base font-semibold text-black transition hover:bg-white disabled:opacity-60"
+              className="w-full rounded-2xl bg-zinc-200 px-4 py-4 text-base font-semibold text-black transition hover:bg-white hover:scale-[0.995] active:scale-[0.985] disabled:opacity-60"
             >
               {loading
                 ? 'Please wait...'
