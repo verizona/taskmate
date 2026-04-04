@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "TaskMate",
   description: "A calmer way to manage tasks and shared lists.",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({
