@@ -5,7 +5,7 @@ import "./globals.css";
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
-});  
+});
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -18,6 +18,7 @@ export const metadata: Metadata = {
   icons: {
     icon: "/favicon.png",
   },
+  themeColor: "#000000",
 };
 
 export default function RootLayout({
