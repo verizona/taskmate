@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { supabase } from '@/lib/supabase';
-
+ 
 type ListRow = {
   id: string;
   name: string;
