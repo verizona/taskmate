@@ -871,8 +871,8 @@ export default function DashboardPage() {
               <div>
                 <div
                   style={{
-                  width: '44px',
-                  height: '44px',
+                  width: '100px',
+                  height: '100px',
                   backgroundImage: 'url("/logo-icon.png")',
                   backgroundRepeat: 'no-repeat',
                   backgroundPosition: 'center',
