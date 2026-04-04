@@ -9,7 +9,7 @@ type ListRow = {
   name: string;
   owner_id: string;
   created_at: string;
-};
+}; 
 
 type TaskRow = {
   id: string;
