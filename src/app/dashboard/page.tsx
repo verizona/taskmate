@@ -870,10 +870,10 @@ export default function DashboardPage() {
             <div style={styles.homeHeader}>
               <div>
                 <img
-                  src="/logo-icon.png"
-                  alt="TaskMate"
-                  style={{ height: '40px' }}
-                />
+  src="/logo-icon.png"
+  alt="TaskMate"
+  style={{ height: '40px' }}
+/>
                 <div style={styles.subtle}>Signed in as {userEmail}</div>
               </div>
               <button style={styles.ghostButton} onClick={signOut}>
