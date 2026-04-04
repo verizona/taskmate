@@ -869,18 +869,26 @@ export default function DashboardPage() {
           <>
             <div style={styles.homeHeader}>
               <div>
-                <img
-  src="/logo-icon.png"
-  alt="TaskMate"
-  style={{ height: '40px' }}
-/>
-                <div style={styles.subtle}>Signed in as {userEmail}</div>
+                <div
+                  style={{
+                  width: '44px',
+                  height: '44px',
+                  backgroundImage: 'url("/logo-icon.png")',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'center',
+                  backgroundSize: 'contain',
+                }}
+              ></div>
+
+              <div style={styles.subtitle}>
+                Signed in as {userEmail}
               </div>
-              <button style={styles.ghostButton} onClick={signOut}>
-                Sign out
-              </button>
             </div>
 
+            <button style={styles.ghostButton} onClick={signOut}>
+              Sign out
+            </button>
+          </div>
             <div
               style={{
                 ...styles.cardGrid,
