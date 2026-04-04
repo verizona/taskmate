@@ -3,13 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { supabase } from '@/lib/supabase';
- 
+
 type ListRow = {
   id: string;
   name: string;
   owner_id: string;
   created_at: string;
-}; 
+};
 
 type TaskRow = {
   id: string;
@@ -103,9 +103,16 @@ function isOverdue(task: TaskRow) {
   return due.getTime() < now.getTime();
 }
 
+function priorityLabel(priority: string | null | undefined) {
+  if (priority === 'high') return 'High';
+  if (priority === 'low') return 'Low';
+  return 'Medium';
+}
+
 export default function DashboardPage() {
   const isMobile = useIsMobile();
   const bootstrappedRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string>('');
@@ -152,6 +159,68 @@ export default function DashboardPage() {
   const [error, setError] = useState('');
   const [deletingList, setDeletingList] = useState(false);
 
+  function ensureAudioContext() {
+    if (typeof window === 'undefined') return null;
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return null;
+
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioCtx();
+    }
+
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch(() => {});
+    }
+
+    return audioContextRef.current;
+  }
+
+  function playTone(type: 'tap' | 'success' | 'complete' | 'delete' | 'open') {
+    try {
+      const ctx = ensureAudioContext();
+      if (!ctx) return;
+
+      const now = ctx.currentTime;
+
+      const config = {
+        tap: { f1: 640, f2: 540, dur: 0.045, gain: 0.018 },
+        success: { f1: 720, f2: 960, dur: 0.08, gain: 0.022 },
+        complete: { f1: 520, f2: 780, dur: 0.09, gain: 0.024 },
+        delete: { f1: 220, f2: 180, dur: 0.09, gain: 0.02 },
+        open: { f1: 420, f2: 620, dur: 0.05, gain: 0.015 },
+      }[type];
+
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(config.f1, now);
+      oscillator.frequency.exponentialRampToValueAtTime(config.f2, now + config.dur);
+
+      gainNode.gain.setValueAtTime(0.0001, now);
+      gainNode.gain.exponentialRampToValueAtTime(config.gain, now + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + config.dur);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.start(now);
+      oscillator.stop(now + config.dur + 0.02);
+    } catch {
+      // ignore audio errors
+    }
+  }
+
+  function flashSuccess(text: string) {
+    setMessage(text);
+    setError('');
+  }
+
+  function flashError(text: string) {
+    setError(text);
+    setMessage('');
+  }
+
   useEffect(() => {
     let mounted = true;
 
@@ -189,7 +258,7 @@ export default function DashboardPage() {
             '',
         });
       } catch (e: any) {
-        if (mounted) setError(e?.message || 'Failed to load dashboard');
+        if (mounted) flashError(e?.message || 'Failed to load dashboard');
       } finally {
         if (mounted) setLoading(false);
       }
@@ -218,6 +287,15 @@ export default function DashboardPage() {
       setMembers([]);
     }
   }, [selectedListId]);
+
+  useEffect(() => {
+    if (!message && !error) return;
+    const t = window.setTimeout(() => {
+      setMessage('');
+      setError('');
+    }, 2200);
+    return () => window.clearTimeout(t);
+  }, [message, error]);
 
   async function initializeDashboard(
     uid: string,
@@ -329,45 +407,45 @@ export default function DashboardPage() {
   }
 
   async function loadAllTasks(uid?: string) {
-  const actualUserId = uid || userId;
-  if (!actualUserId) return;
+    const actualUserId = uid || userId;
+    if (!actualUserId) return;
 
-  const { data: memberships, error: membershipError } = await supabase
-    .from('list_members')
-    .select(`
-      list_id,
-      lists (
-        id
+    const { data: memberships, error: membershipError } = await supabase
+      .from('list_members')
+      .select(`
+        list_id,
+        lists (
+          id
+        )
+      `)
+      .eq('user_id', actualUserId);
+
+    if (membershipError) throw membershipError;
+
+    const ids = (memberships || [])
+      .map((m: any) => m.lists?.id)
+      .filter(Boolean);
+
+    if (!ids.length) {
+      setTasks([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('tasks')
+      .select(
+        'id, title, is_complete, user_id, list_id, due_date, due_time, priority, reminder_minutes, notes, created_at'
       )
-    `)
-    .eq('user_id', actualUserId);
+      .in('list_id', ids)
+      .order('is_complete', { ascending: true })
+      .order('due_date', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: false });
 
-  if (membershipError) throw membershipError;
+    if (error) throw error;
 
-  const ids = (memberships || [])
-    .map((m: any) => m.lists?.id)
-    .filter(Boolean);
-
-  if (!ids.length) {
-    setTasks([]);
-    return;
+    const rows: TaskRow[] = Array.isArray(data) ? (data as unknown as TaskRow[]) : [];
+    setTasks(rows);
   }
-
-  const { data, error } = await supabase
-    .from('tasks')
-    .select(
-      'id, title, is_complete, user_id, list_id, due_date, due_time, priority, reminder_minutes, notes, created_at'
-    )
-    .in('list_id', ids)
-    .order('is_complete', { ascending: true })
-    .order('due_date', { ascending: true, nullsFirst: false })
-    .order('created_at', { ascending: false });
-
-  if (error) throw error;
-
-  const rows: TaskRow[] = Array.isArray(data) ? (data as unknown as TaskRow[]) : [];
-  setTasks(rows);
-}
 
   async function loadMembers(listId: string) {
     const { data, error } = await supabase
@@ -386,7 +464,7 @@ export default function DashboardPage() {
       .order('created_at', { ascending: true });
 
     if (error) {
-      setError(error.message);
+      flashError(error.message);
       return;
     }
 
@@ -398,7 +476,7 @@ export default function DashboardPage() {
     try {
       if (!userId) return;
       if (!newListName.trim()) {
-        setError('List name is required.');
+        flashError('List name is required.');
         return;
       }
 
@@ -429,13 +507,15 @@ export default function DashboardPage() {
       await loadAllTasks();
       setSelectedListId(list.id);
       setScreen('list');
-      setMessage('List created');
+      playTone('success');
+      flashSuccess('List created');
     } catch (e: any) {
-      setError(e.message || 'Failed to create list');
+      flashError(e.message || 'Failed to create list');
     }
   }
 
   function startEditList(list: ListRow) {
+    playTone('tap');
     setEditingListId(list.id);
     setEditListName(list.name);
   }
@@ -449,7 +529,7 @@ export default function DashboardPage() {
     try {
       if (!editingListId) return;
       if (!editListName.trim()) {
-        setError('List name is required.');
+        flashError('List name is required.');
         return;
       }
 
@@ -465,9 +545,10 @@ export default function DashboardPage() {
 
       await loadLists();
       cancelEditList();
-      setMessage('List updated');
+      playTone('success');
+      flashSuccess('List updated');
     } catch (e: any) {
-      setError(e.message || 'Failed to update list');
+      flashError(e.message || 'Failed to update list');
     }
   }
 
@@ -475,11 +556,11 @@ export default function DashboardPage() {
     try {
       if (!userId) return;
       if (!newTaskTitle.trim()) {
-        setError('Title is required.');
+        flashError('Title is required.');
         return;
       }
       if (!newTaskListId) {
-        setError('Select a list.');
+        flashError('Select a list.');
         return;
       }
 
@@ -510,9 +591,10 @@ export default function DashboardPage() {
       await loadAllTasks();
       setSelectedListId(newTaskListId);
       setScreen('list');
-      setMessage('Task added');
+      playTone('success');
+      flashSuccess('Task added');
     } catch (e: any) {
-      setError(e.message || 'Failed to add task');
+      flashError(e.message || 'Failed to add task');
     }
   }
 
@@ -546,13 +628,15 @@ export default function DashboardPage() {
       if (editingTaskId === task.id) cancelEdit();
 
       await loadAllTasks();
-      setMessage(nextComplete ? 'Task completed' : 'Task reopened');
+      playTone(nextComplete ? 'complete' : 'tap');
+      flashSuccess(nextComplete ? 'Task completed' : 'Task reopened');
     } catch (e: any) {
-      setError(e.message || 'Failed to update task');
+      flashError(e.message || 'Failed to update task');
     }
   }
 
   function startEdit(task: TaskRow) {
+    playTone('tap');
     setEditingTaskId(task.id);
     setExpandedTaskId(task.id);
     setEditTitle(task.title);
@@ -580,7 +664,7 @@ export default function DashboardPage() {
   async function saveEdit(taskId: string) {
     try {
       if (!editTitle.trim()) {
-        setError('Title is required.');
+        flashError('Title is required.');
         return;
       }
 
@@ -604,9 +688,10 @@ export default function DashboardPage() {
 
       cancelEdit();
       await loadAllTasks();
-      setMessage('Task updated');
+      playTone('success');
+      flashSuccess('Task updated');
     } catch (e: any) {
-      setError(e.message || 'Failed to save task');
+      flashError(e.message || 'Failed to save task');
     }
   }
 
@@ -619,9 +704,10 @@ export default function DashboardPage() {
       if (editingTaskId === taskId) cancelEdit();
 
       await loadAllTasks();
-      setMessage('Task deleted');
+      playTone('delete');
+      flashSuccess('Task deleted');
     } catch (e: any) {
-      setError(e.message || 'Failed to delete task');
+      flashError(e.message || 'Failed to delete task');
     }
   }
 
@@ -629,7 +715,7 @@ export default function DashboardPage() {
     try {
       if (!selectedListId) return;
       if (!inviteEmail.trim()) {
-        setError('Email is required.');
+        flashError('Email is required.');
         return;
       }
 
@@ -671,9 +757,10 @@ export default function DashboardPage() {
       setInviteEmail('');
       await loadMembers(selectedListId);
       await loadLists();
-      setMessage(`Invited ${normalized}`);
+      playTone('success');
+      flashSuccess(`Invited ${normalized}`);
     } catch (e: any) {
-      setError(e.message || 'Failed to invite member');
+      flashError(e.message || 'Failed to invite member');
     }
   }
 
@@ -683,7 +770,7 @@ export default function DashboardPage() {
       if (!currentList) return;
 
       if (member.user_id === currentList.owner_id) {
-        setError('You cannot remove the owner.');
+        flashError('You cannot remove the owner.');
         return;
       }
 
@@ -692,9 +779,10 @@ export default function DashboardPage() {
       if (error) throw error;
 
       await loadMembers(selectedListId);
-      setMessage('Member removed');
+      playTone('delete');
+      flashSuccess('Member removed');
     } catch (e: any) {
-      setError(e.message || 'Failed to remove member');
+      flashError(e.message || 'Failed to remove member');
     }
   }
 
@@ -706,7 +794,7 @@ export default function DashboardPage() {
       if (!currentList) return;
 
       if (currentList.owner_id === userId) {
-        setError('Owners cannot leave their own list. Delete it instead.');
+        flashError('Owners cannot leave their own list. Delete it instead.');
         return;
       }
 
@@ -724,66 +812,70 @@ export default function DashboardPage() {
       await loadLists();
       await loadAllTasks();
       setScreen('home');
-      setMessage('You left the list');
+      playTone('delete');
+      flashSuccess('You left the list');
     } catch (e: any) {
-      setError(e.message || 'Failed to leave list');
+      flashError(e.message || 'Failed to leave list');
     }
   }
 
   async function deleteCurrentList() {
-  try {
-    if (!selectedListId || !userId) return;
+    try {
+      if (!selectedListId || !userId) return;
 
-    const currentList = lists.find((l) => l.id === selectedListId);
-    if (!currentList) return;
+      const currentList = lists.find((l) => l.id === selectedListId);
+      if (!currentList) return;
 
-    if (currentList.owner_id !== userId) {
-      setError('Only the owner can delete this list.');
-      return;
+      if (currentList.owner_id !== userId) {
+        flashError('Only the owner can delete this list.');
+        return;
+      }
+
+      const ok = window.confirm(`Delete list "${currentList.name}"?`);
+      if (!ok) return;
+
+      setDeletingList(true);
+      setError('');
+      setMessage('');
+
+      const { error } = await supabase
+        .from('lists')
+        .delete()
+        .eq('id', selectedListId);
+
+      if (error) throw error;
+
+      await loadLists();
+      await loadAllTasks();
+      setScreen('home');
+      playTone('delete');
+      flashSuccess('List deleted');
+    } catch (e: any) {
+      flashError(e.message || 'Failed to delete list');
+    } finally {
+      setDeletingList(false);
     }
-
-    const ok = window.confirm(
-      `Delete list "${currentList.name}"?`
-    );
-    if (!ok) return;
-
-    setDeletingList(true);
-    setError('');
-    setMessage('');
-
-    const { error } = await supabase
-      .from('lists')
-      .delete()
-      .eq('id', selectedListId);
-
-    if (error) throw error;
-
-    await loadLists();
-    await loadAllTasks();
-    setScreen('home');
-    setMessage('List deleted');
-  } catch (e: any) {
-    setError(e.message || 'Failed to delete list');
-  } finally {
-    setDeletingList(false);
   }
-}
 
   async function signOut() {
+    playTone('tap');
     await supabase.auth.signOut();
     window.location.href = '/';
   }
 
   function openCreateModal(defaultListId?: string) {
+    playTone('open');
     setNewTaskListId(defaultListId || selectedListId || lists[0]?.id || '');
     setShowCreateModal(true);
   }
 
   function toggleExpanded(taskId: string) {
+    playTone('tap');
     setExpandedTaskId((current) => (current === taskId ? null : taskId));
   }
 
   function goBackHome() {
+    playTone('tap');
     setScreen('home');
     setExpandedTaskId(null);
     setEditingTaskId(null);
@@ -854,7 +946,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <main style={styles.page}>
-        <div style={styles.loadingWrap}>Loading...</div>
+        <div style={styles.loadingWrap}>Loading TaskMate...</div>
       </main>
     );
   }
@@ -868,27 +960,28 @@ export default function DashboardPage() {
         {screen === 'home' ? (
           <>
             <div style={styles.homeHeader}>
-              <div>
-                <div
-                  style={{
-                  width: '100px',
-                  height: '100px',
-                  backgroundImage: 'url("/logo-icon.png")',
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'center',
-                  backgroundSize: 'contain',
-                }}
-              ></div>
+              <div style={styles.brandWrap}>
+                <div style={styles.logoBadge}>
+                  <div
+                    style={{
+                      width: '120px',
+                      height: '120px',
+                      backgroundImage: 'url("/logo-icon.png")',
+                      backgroundRepeat: 'no-repeat',
+                      backgroundPosition: 'center',
+                      backgroundSize: 'contain',
+                    }}
+                  />
+                </div>
 
-              <div style={styles.subtitle}>
-                Signed in as {userEmail}
+                <div style={styles.subtitle}>Signed in as {userEmail}</div>
               </div>
+
+              <button style={styles.ghostButton} onClick={signOut}>
+                Sign out
+              </button>
             </div>
 
-            <button style={styles.ghostButton} onClick={signOut}>
-              Sign out
-            </button>
-          </div>
             <div
               style={{
                 ...styles.cardGrid,
@@ -897,7 +990,10 @@ export default function DashboardPage() {
             >
               <button
                 style={{ ...styles.statCard, ...styles.todayCard }}
-                onClick={() => setScreen('today')}
+                onClick={() => {
+                  playTone('tap');
+                  setScreen('today');
+                }}
               >
                 <div style={styles.statCount}>{todayTasks.length}</div>
                 <div style={styles.statLabel}>Today</div>
@@ -905,7 +1001,10 @@ export default function DashboardPage() {
 
               <button
                 style={{ ...styles.statCard, ...styles.allCard }}
-                onClick={() => setScreen('all')}
+                onClick={() => {
+                  playTone('tap');
+                  setScreen('all');
+                }}
               >
                 <div style={styles.statCount}>{activeTasks.length}</div>
                 <div style={styles.statLabel}>All</div>
@@ -913,7 +1012,10 @@ export default function DashboardPage() {
 
               <button
                 style={{ ...styles.statCard, ...styles.completedCard }}
-                onClick={() => setScreen('completed')}
+                onClick={() => {
+                  playTone('tap');
+                  setScreen('completed');
+                }}
               >
                 <div style={styles.statCount}>{completedTasks.length}</div>
                 <div style={styles.statLabel}>Completed</div>
@@ -946,6 +1048,7 @@ export default function DashboardPage() {
                       key={list.id}
                       style={styles.listRow}
                       onClick={() => {
+                        playTone('tap');
                         setSelectedListId(list.id);
                         setScreen('list');
                       }}
@@ -975,7 +1078,7 @@ export default function DashboardPage() {
                   {screen === 'today'
                     ? 'Today'
                     : screen === 'all'
-                      ? 'All'
+                      ? 'All Tasks'
                       : screen === 'completed'
                         ? 'Completed'
                         : 'List'}
@@ -1104,13 +1207,28 @@ export default function DashboardPage() {
                             </button>
 
                             <div style={styles.taskBody}>
-                              <div
-                                style={{
-                                  ...styles.taskTitle,
-                                  ...(task.is_complete ? styles.taskTitleDone : {}),
-                                }}
-                              >
-                                {task.title}
+                              <div style={styles.taskTitleRow}>
+                                <div
+                                  style={{
+                                    ...styles.taskTitle,
+                                    ...(task.is_complete ? styles.taskTitleDone : {}),
+                                  }}
+                                >
+                                  {task.title}
+                                </div>
+
+                                <div
+                                  style={{
+                                    ...styles.priorityPill,
+                                    ...(task.priority === 'high'
+                                      ? styles.priorityHigh
+                                      : task.priority === 'low'
+                                        ? styles.priorityLow
+                                        : styles.priorityMedium),
+                                  }}
+                                >
+                                  {priorityLabel(task.priority)}
+                                </div>
                               </div>
 
                               {task.notes ? <div style={styles.taskNotes}>{task.notes}</div> : null}
@@ -1364,7 +1482,13 @@ export default function DashboardPage() {
           <div style={styles.modalOverlay} onClick={() => setShowCreateModal(false)}>
             <div style={styles.modalCard} onClick={(e) => e.stopPropagation()}>
               <div style={styles.modalHeader}>
-                <button style={styles.iconCircle} onClick={() => setShowCreateModal(false)}>
+                <button
+                  style={styles.iconCircle}
+                  onClick={() => {
+                    playTone('tap');
+                    setShowCreateModal(false);
+                  }}
+                >
                   ✕
                 </button>
                 <div style={styles.modalTitle}>New Reminder</div>
@@ -1542,7 +1666,8 @@ export default function DashboardPage() {
 const styles: Record<string, CSSProperties> = {
   page: {
     minHeight: '100vh',
-    background: '#000',
+    background:
+      'radial-gradient(circle at top, rgba(60,70,95,0.22), transparent 30%), #000000',
     color: '#fff',
     fontFamily: 'Arial, sans-serif',
     padding: '20px 16px 90px',
@@ -1551,18 +1676,28 @@ const styles: Record<string, CSSProperties> = {
     maxWidth: 820,
     margin: '0 auto',
   },
+  brandWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  logoBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    borderRadius: 28,
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))',
+    border: '1px solid rgba(255,255,255,0.06)',
+    width: 'fit-content',
+    boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+  },
   homeHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
     marginBottom: 20,
-  },
-  appTitle: {
-    fontSize: 34,
-    fontWeight: 700,
-    margin: 0,
-    color: '#fff',
   },
   topBar: {
     display: 'flex',
@@ -1576,10 +1711,11 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 0,
   },
   topBarSmall: {
-    color: '#6b7280',
-    fontSize: 18,
+    color: '#7d8596',
+    fontSize: 15,
     fontWeight: 700,
     marginBottom: 4,
+    letterSpacing: 0.2,
   },
   topBarTitle: {
     color: '#fff',
@@ -1588,27 +1724,31 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: 1.1,
     wordBreak: 'break-word',
   },
-  subtle: {
+  subtitle: {
     color: '#9ca3af',
     fontSize: 14,
-    marginTop: 6,
+    marginTop: 2,
     wordBreak: 'break-word',
   },
   success: {
     marginBottom: 12,
-    padding: 12,
-    borderRadius: 12,
-    background: '#052e16',
-    color: '#86efac',
+    padding: 13,
+    borderRadius: 14,
+    background: 'rgba(6, 78, 59, 0.55)',
+    color: '#a7f3d0',
     fontWeight: 600,
+    border: '1px solid rgba(52, 211, 153, 0.2)',
+    backdropFilter: 'blur(8px)',
   },
   error: {
     marginBottom: 12,
-    padding: 12,
-    borderRadius: 12,
-    background: '#3f1111',
-    color: '#fca5a5',
+    padding: 13,
+    borderRadius: 14,
+    background: 'rgba(127, 29, 29, 0.55)',
+    color: '#fecaca',
     fontWeight: 600,
+    border: '1px solid rgba(248, 113, 113, 0.2)',
+    backdropFilter: 'blur(8px)',
   },
   cardGrid: {
     display: 'grid',
@@ -1620,13 +1760,15 @@ const styles: Record<string, CSSProperties> = {
     gridTemplateColumns: '1fr 1fr',
   },
   statCard: {
-    border: 'none',
-    borderRadius: 22,
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 24,
     padding: '18px 18px',
     color: '#fff',
     textAlign: 'left',
     minHeight: 118,
     cursor: 'pointer',
+    boxShadow: '0 16px 40px rgba(0,0,0,0.22)',
+    transition: 'transform 140ms ease, opacity 140ms ease',
   },
   statCount: {
     fontSize: 42,
@@ -1639,19 +1781,20 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 700,
   },
   todayCard: {
-    background: 'linear-gradient(135deg, #89b9ff, #5f88f7)',
+    background: 'linear-gradient(135deg, #7fb0ff, #4f7cff)',
   },
   allCard: {
-    background: 'linear-gradient(135deg, #3d3d3d, #1e1e1e)',
+    background: 'linear-gradient(135deg, #2e3340, #171a21)',
   },
   completedCard: {
-    background: 'linear-gradient(135deg, #a9afb9, #8d949f)',
+    background: 'linear-gradient(135deg, #8f99a8, #656f7d)',
   },
   homePanel: {
-    background: '#121317',
-    borderRadius: 24,
+    background: 'rgba(18, 19, 23, 0.92)',
+    borderRadius: 26,
     padding: 18,
     border: '1px solid #22252c',
+    boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
   },
   sectionRow: {
     display: 'flex',
@@ -1673,10 +1816,10 @@ const styles: Record<string, CSSProperties> = {
   },
   listRow: {
     width: '100%',
-    background: '#1a1c22',
+    background: 'linear-gradient(180deg, #1a1c22, #171920)',
     color: '#fff',
     border: '1px solid #2a2e37',
-    borderRadius: 18,
+    borderRadius: 20,
     padding: '16px 18px',
     display: 'flex',
     justifyContent: 'space-between',
@@ -1684,6 +1827,7 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     textAlign: 'left',
     marginBottom: 10,
+    boxShadow: '0 10px 26px rgba(0,0,0,0.14)',
   },
   listRowTitle: {
     fontSize: 18,
@@ -1709,7 +1853,7 @@ const styles: Record<string, CSSProperties> = {
   groupTitle: {
     fontSize: 19,
     fontWeight: 700,
-    color: '#60a5fa',
+    color: '#8eb2ff',
     marginBottom: 10,
     paddingLeft: 2,
   },
@@ -1727,31 +1871,41 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     alignItems: 'flex-start',
     gap: 12,
-    padding: '10px 2px',
+    padding: '12px 4px',
     cursor: 'pointer',
+    borderRadius: 16,
   },
   circleButton: {
-    width: 28,
-    height: 28,
-    minWidth: 28,
+    width: 30,
+    height: 30,
+    minWidth: 30,
     borderRadius: '50%',
     border: '2px solid #404552',
     background: 'transparent',
     color: '#fff',
     fontWeight: 700,
     cursor: 'pointer',
-    lineHeight: '22px',
+    lineHeight: '24px',
     textAlign: 'center',
     padding: 0,
     marginTop: 2,
+    transition: 'transform 120ms ease',
   },
   circleButtonChecked: {
     background: '#4f8cff',
     borderColor: '#4f8cff',
+    boxShadow: '0 0 0 4px rgba(79,140,255,0.15)',
   },
   taskBody: {
     flex: 1,
     minWidth: 0,
+  },
+  taskTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    flexWrap: 'wrap',
   },
   taskTitle: {
     fontSize: 17,
@@ -1759,22 +1913,47 @@ const styles: Record<string, CSSProperties> = {
     color: '#fff',
     fontWeight: 500,
     wordBreak: 'break-word',
+    flex: 1,
+    minWidth: 160,
   },
   taskTitleDone: {
     textDecoration: 'line-through',
     color: '#808691',
   },
+  priorityPill: {
+    padding: '5px 10px',
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 700,
+    border: '1px solid transparent',
+    whiteSpace: 'nowrap',
+  },
+  priorityHigh: {
+    background: 'rgba(239,68,68,0.12)',
+    color: '#fca5a5',
+    borderColor: 'rgba(239,68,68,0.18)',
+  },
+  priorityMedium: {
+    background: 'rgba(96,165,250,0.12)',
+    color: '#bfdbfe',
+    borderColor: 'rgba(96,165,250,0.18)',
+  },
+  priorityLow: {
+    background: 'rgba(52,211,153,0.12)',
+    color: '#a7f3d0',
+    borderColor: 'rgba(52,211,153,0.18)',
+  },
   taskNotes: {
     fontSize: 14,
     color: '#9ca3af',
-    marginTop: 4,
+    marginTop: 6,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
   },
   taskMeta: {
     fontSize: 14,
     color: '#8b92a0',
-    marginTop: 4,
+    marginTop: 6,
   },
   taskMetaOverdue: {
     color: '#f87171',
@@ -1801,10 +1980,11 @@ const styles: Record<string, CSSProperties> = {
   },
   membersPanelDark: {
     marginTop: 18,
-    background: '#121317',
+    background: 'rgba(18, 19, 23, 0.92)',
     border: '1px solid #22252c',
-    borderRadius: 24,
+    borderRadius: 26,
     padding: 18,
+    boxShadow: '0 18px 50px rgba(0,0,0,0.22)',
   },
   membersTitle: {
     fontSize: 18,
@@ -1933,12 +2113,13 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     fontWeight: 600,
     height: 'fit-content',
+    boxShadow: '0 8px 18px rgba(0,0,0,0.12)',
   },
   secondaryActionButton: {
     padding: '12px 16px',
     borderRadius: 16,
     border: 'none',
-    background: '#2a2d36',
+    background: 'linear-gradient(180deg, #313643, #262a34)',
     color: '#fff',
     cursor: 'pointer',
     fontWeight: 700,
@@ -1996,59 +2177,60 @@ const styles: Record<string, CSSProperties> = {
     position: 'fixed',
     right: 22,
     bottom: 22,
-    width: 64,
-    height: 64,
+    width: 66,
+    height: 66,
     borderRadius: '50%',
-    border: 'none',
-    background: '#79a7ff',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'linear-gradient(135deg, #8cb5ff, #5f8eff)',
     color: '#fff',
     fontSize: 38,
     lineHeight: '64px',
     textAlign: 'center',
     cursor: 'pointer',
-    boxShadow: '0 12px 30px rgba(121,167,255,0.35)',
+    boxShadow: '0 18px 40px rgba(95,142,255,0.35)',
   },
   modalOverlay: {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(0,0,0,0.72)',
-  display: 'flex',
-  justifyContent: 'center',
-  alignItems: 'flex-start',
-  paddingTop: 'max(24px, env(safe-area-inset-top))',
-  paddingRight: 'max(16px, env(safe-area-inset-right))',
-  paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
-  paddingLeft: 'max(16px, env(safe-area-inset-left))',
-  zIndex: 50,
-  overflowY: 'auto',
-  boxSizing: 'border-box',
-},
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.72)',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    paddingTop: 'max(24px, env(safe-area-inset-top))',
+    paddingRight: 'max(16px, env(safe-area-inset-right))',
+    paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
+    paddingLeft: 'max(16px, env(safe-area-inset-left))',
+    zIndex: 50,
+    overflowY: 'auto',
+    boxSizing: 'border-box',
+    backdropFilter: 'blur(10px)',
+  },
   modalCard: {
-  width: '100%',
-  maxWidth: 560,
-  background: '#111318',
-  border: '1px solid #2d3340',
-  borderRadius: 28,
-  padding: 18,
-  boxShadow: '0 24px 80px rgba(0,0,0,0.55)',
-  margin: '0 auto',
-  marginTop: 12,
-  marginBottom: 12,
-  boxSizing: 'border-box',
-},
+    width: '100%',
+    maxWidth: 560,
+    background: '#111318',
+    border: '1px solid #2d3340',
+    borderRadius: 28,
+    padding: 18,
+    boxShadow: '0 24px 80px rgba(0,0,0,0.55)',
+    margin: '0 auto',
+    marginTop: 12,
+    marginBottom: 12,
+    boxSizing: 'border-box',
+  },
   modalHeader: {
-  display: 'grid',
-  gridTemplateColumns: '56px 1fr 56px',
-  alignItems: 'center',
-  gap: 12,
-  marginBottom: 16,
-  position: 'sticky',
-  top: 0,
-  background: '#111318',
-  zIndex: 2,
-  paddingTop: 4,
-  paddingBottom: 4,
-},
+    display: 'grid',
+    gridTemplateColumns: '56px 1fr 56px',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+    position: 'sticky',
+    top: 0,
+    background: '#111318',
+    zIndex: 2,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
   modalTitle: {
     color: '#ffffff',
     fontSize: 20,
@@ -2057,20 +2239,20 @@ const styles: Record<string, CSSProperties> = {
     lineHeight: 1.2,
   },
   iconCircle: {
-  width: 56,
-  height: 56,
-  borderRadius: '50%',
-  border: '1px solid #4b5563',
-  background: 'linear-gradient(180deg, #3a3f4a, #2d313b)',
-  color: '#ffffff',
-  cursor: 'pointer',
-  fontSize: 28,
-  lineHeight: '52px',
-  textAlign: 'center',
-  padding: 0,
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
-  justifySelf: 'center',
-},
+    width: 56,
+    height: 56,
+    borderRadius: '50%',
+    border: '1px solid #4b5563',
+    background: 'linear-gradient(180deg, #3a3f4a, #2d313b)',
+    color: '#ffffff',
+    cursor: 'pointer',
+    fontSize: 28,
+    lineHeight: '52px',
+    textAlign: 'center',
+    padding: 0,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+    justifySelf: 'center',
+  },
   modalSection: {
     background: '#181b22',
     borderRadius: 24,
