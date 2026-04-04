@@ -869,7 +869,17 @@ export default function DashboardPage() {
           <>
             <div style={styles.homeHeader}>
               <div>
-                <h1 style={styles.appTitle}>TaskMate</h1>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+  <img
+    src="/logo-icon.png"
+    alt="TaskMate"
+    style={{
+      height: '36px',
+      cursor: 'pointer'
+    }}
+    onClick={() => window.location.href = '/dashboard'}
+  />
+</div>
                 <div style={styles.subtle}>Signed in as {userEmail}</div>
               </div>
               <button style={styles.ghostButton} onClick={signOut}>
