@@ -12,7 +12,7 @@ export default function Home() {
 
   useEffect(() => {
     checkSession();
-  }, []);
+  }, []); 
 
   async function checkSession() {
     const {
